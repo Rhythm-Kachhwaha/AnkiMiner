@@ -1,0 +1,22 @@
+from fastapi import FastAPI, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
+
+from app.schemas import CaptureRequest, CaptureResponse
+from app.services.yomitan import YomitanError, YomitanService
+
+app = FastAPI(title="AnkiMiner Local API")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origin_regex=r"chrome-extension://.*",
+    allow_methods=["POST"],
+    allow_headers=["Content-Type"],
+)
+
+
+@app.post("/api/capture", response_model=CaptureResponse)
+def capture_term(request: CaptureRequest) -> CaptureResponse:
+    try:
+        term = YomitanService().identify(request.text)
+    except YomitanError as error:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
+    return CaptureResponse(expression=term.expression, reading=term.reading)
