@@ -1,1 +1,29 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AnkiMiner</title><link rel="stylesheet" href="sidepanel.css"></head><body><main class="panel"><header><span class="eyebrow">ANKIMINER</span><button id="mining-toggle" type="button" aria-pressed="false">Start mining</button></header><p id="mode" class="status">Mining mode is off.</p><section aria-live="polite"><p id="capture-status" class="status">Select Japanese text after starting mining.</p><h1 id="expression">—</h1><p id="reading" class="reading"></p><div id="meanings" class="details"></div><div id="examples" class="details"></div></section></main><script src="sidepanel.js"></script></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AnkiMiner</title>
+  <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+  <main class="panel">
+    <header>
+      <span class="eyebrow">ANKIMINER</span>
+      <button id="mining-toggle" type="button" aria-pressed="false">Start mining</button>
+    </header>
+    <p id="mode" class="status">Mining mode is off.</p>
+    <section aria-live="polite">
+      <div class="capture-header">
+        <p id="capture-status" class="status">Select Japanese text after starting mining.</p>
+        <span id="save-badge" class="badge" hidden></span>
+      </div>
+      <h1 id="expression">—</h1>
+      <p id="reading" class="reading"></p>
+      <div id="meanings" class="details"></div>
+      <div id="examples" class="details"></div>
+    </section>
+  </main>
+  <script src="sidepanel.js"></script>
+</body>
+</html>

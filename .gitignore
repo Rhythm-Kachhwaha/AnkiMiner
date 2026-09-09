@@ -56,10 +56,16 @@ logs/
 !package-lock.json
 !tsconfig.json
 structure.txt
-test_*.py
+/test_*.py
 extract_examples.py
 inspect_structure.py
 
 # Local development
 *.local
 local/
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+backend/data/

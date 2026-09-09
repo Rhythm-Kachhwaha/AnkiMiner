@@ -1,3 +1,6 @@
+import os
+from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -7,6 +10,19 @@ from app.services.yomitan import DictionaryEntry, EnrichedTerm, IdentifiedTerm, 
 
 
 class CaptureRouteTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.temp_dir.name) / "test_route.db"
+        self.original_env = os.environ.get("ANKIMINER_DB_PATH")
+        os.environ["ANKIMINER_DB_PATH"] = str(self.db_path)
+
+    def tearDown(self):
+        if self.original_env is not None:
+            os.environ["ANKIMINER_DB_PATH"] = self.original_env
+        else:
+            os.environ.pop("ANKIMINER_DB_PATH", None)
+        self.temp_dir.cleanup()
+
     @patch("app.main.YomitanService")
     def test_returns_json_compatible_example_from_service_dataclass(self, service_class):
         service = service_class.return_value

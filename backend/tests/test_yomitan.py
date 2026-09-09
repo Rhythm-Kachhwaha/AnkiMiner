@@ -1,5 +1,9 @@
+import http.client
 import unittest
-from app.services.yomitan import YomitanResponseError, YomitanService
+from unittest.mock import patch
+
+from app.services.yomitan import YomitanResponseError, YomitanService, YomitanUnavailableError
+
 
 class YomitanNormalizationTests(unittest.TestCase):
     def test_uses_dictionary_headword_and_deinflection_not_fragment(self):
@@ -25,3 +29,10 @@ class YomitanNormalizationTests(unittest.TestCase):
         for payload in ([],{},[{"content":[[]]}],[{"content":[[{"reading":"えいが"}]]}]):
             with self.subTest(payload=payload):
                 with self.assertRaises(YomitanResponseError): YomitanService.normalize_tokenize_response(payload)
+
+    def test_remote_disconnected_raises_unavailable_not_500(self):
+        """RemoteDisconnected (OSError, not URLError) must not escape as a bare exception."""
+        service = YomitanService()
+        with patch("urllib.request.urlopen", side_effect=http.client.RemoteDisconnected("closed")):
+            with self.assertRaises(YomitanUnavailableError):
+                service._post_json("/tokenize", {"text": "映画"})

@@ -67,7 +67,7 @@ class YomitanService:
         try:
             with urlopen(request, timeout=self._timeout_seconds) as response: return json.loads(response.read().decode())
         except HTTPError as error: raise YomitanResponseError("Yomitan returned an invalid dictionary response.") from error
-        except (URLError, TimeoutError) as error: raise YomitanUnavailableError("Yomitan is unavailable. Start Yomitan and try again.") from error
+        except (URLError, TimeoutError, OSError) as error: raise YomitanUnavailableError("Yomitan is unavailable. Start Yomitan and try again.") from error
         except (UnicodeDecodeError, json.JSONDecodeError) as error: raise YomitanResponseError("Yomitan returned an invalid response.") from error
 
     @staticmethod

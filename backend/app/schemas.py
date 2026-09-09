@@ -7,6 +7,7 @@ class CaptureRequest(BaseModel):
     """Untrusted text captured from the active webpage."""
 
     text: str = Field(max_length=500)
+    deck_name: str = Field(default="Default", max_length=100)
 
     @field_validator("text")
     @classmethod
@@ -40,9 +41,15 @@ class DictionaryEntry(BaseModel):
 
 
 class CaptureResponse(BaseModel):
+    id: Optional[int] = None
     expression: str
     reading: str
     source_text: str
     deinflected_text: str
     entries: list[DictionaryEntry] = []
     dictionary_error: Optional[str] = None
+    deck_name: str = "Default"
+    status: str = "saved"
+    is_duplicate: bool = False
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None

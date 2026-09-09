@@ -2,6 +2,7 @@ const API_URL = "http://127.0.0.1:8000/api/capture";
 const toggle = document.querySelector("#mining-toggle");
 const mode = document.querySelector("#mode");
 const status = document.querySelector("#capture-status");
+const saveBadge = document.querySelector("#save-badge");
 const expression = document.querySelector("#expression");
 const reading = document.querySelector("#reading");
 const meanings = document.querySelector("#meanings");
@@ -76,6 +77,11 @@ async function identify(text) {
   if (!capturedText) return;
   const requestId = ++currentCaptureId;
   setStatus("Identifying selection…");
+  if (saveBadge) {
+    saveBadge.hidden = true;
+    saveBadge.className = "badge";
+    saveBadge.textContent = "";
+  }
   expression.textContent = "—";
   reading.textContent = "";
   meanings.replaceChildren();
@@ -99,9 +105,25 @@ async function identify(text) {
     expression.textContent = body.expression;
     reading.textContent = body.reading || "Reading unavailable from Yomitan.";
     renderDetails(body);
-    setStatus(body.dictionary_error || "Capture identified.", Boolean(body.dictionary_error));
+
+    if (saveBadge) {
+      if (body.is_duplicate) {
+        saveBadge.textContent = "ALREADY SAVED";
+        saveBadge.className = "badge already-saved";
+        saveBadge.hidden = false;
+        setStatus(body.dictionary_error || "Card already saved.");
+      } else {
+        saveBadge.textContent = "SAVED";
+        saveBadge.className = "badge saved";
+        saveBadge.hidden = false;
+        setStatus(body.dictionary_error || "Card saved.");
+      }
+    } else {
+      setStatus(body.dictionary_error || "Capture identified.", Boolean(body.dictionary_error));
+    }
   } catch (error) {
     if (requestId !== currentCaptureId) return;
+    if (saveBadge) saveBadge.hidden = true;
     setStatus(error.message || "Backend unavailable.", true);
   }
 }
