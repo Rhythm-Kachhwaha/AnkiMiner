@@ -4,7 +4,7 @@ from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.db.connection import init_db
-from app.schemas import CaptureRequest, CaptureResponse
+from app.schemas import CaptureRequest, CaptureResponse, SaveCardRequest, SaveCardResponse
 from app.services.card_service import CardService
 from app.services.yomitan import YomitanError, YomitanService
 
@@ -28,6 +28,16 @@ app.add_middleware(
 def capture_term(request: CaptureRequest) -> CaptureResponse:
     service = CardService(yomitan_service=YomitanService())
     try:
-        return service.capture_and_save(request.text, request.deck_name)
+        if request.auto_save:
+            return service.capture_and_save(request.text, request.deck_name)
+        return service.capture_term(request.text, request.deck_name)
     except YomitanError as error:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
+
+
+@app.post("/api/cards/save", response_model=SaveCardResponse)
+@app.post("/api/card/save", response_model=SaveCardResponse)
+def save_card(request: SaveCardRequest) -> SaveCardResponse:
+    service = CardService()
+    return service.save_card(request)
+

@@ -14,13 +14,21 @@ CREATE TABLE IF NOT EXISTS cards (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     expression TEXT NOT NULL,
     reading TEXT NOT NULL,
+    meaning TEXT NOT NULL DEFAULT '',
+    hint TEXT NOT NULL DEFAULT '',
+    example_sentence TEXT NOT NULL DEFAULT '',
+    example_translation TEXT NOT NULL DEFAULT '',
+    image TEXT NOT NULL DEFAULT '',
+    audio TEXT NOT NULL DEFAULT '',
+    tags TEXT NOT NULL DEFAULT '',
+    notes TEXT NOT NULL DEFAULT '',
     source_text TEXT NOT NULL DEFAULT '',
     deinflected_text TEXT NOT NULL DEFAULT '',
     deck_name TEXT NOT NULL DEFAULT 'Default',
     normalized_expression TEXT NOT NULL,
     normalized_reading TEXT NOT NULL,
     normalized_deck_name TEXT NOT NULL,
-    meanings_json TEXT NOT NULL,
+    meanings_json TEXT NOT NULL DEFAULT '[]',
     examples_json TEXT NOT NULL DEFAULT '[]',
     status TEXT NOT NULL DEFAULT 'saved',
     created_at TEXT NOT NULL,
@@ -67,7 +75,21 @@ def db_session(db_path: Path | str | None = None) -> Iterator[sqlite3.Connection
 
 
 def init_db(db_path: Path | str | None = None) -> None:
-    """Initialize the SQLite database schema."""
+    """Initialize the SQLite database schema and run column migrations if needed."""
     with db_session(db_path) as conn:
         conn.executescript(SCHEMA_SQL)
+        columns = [row["name"] for row in conn.execute("PRAGMA table_info(cards)").fetchall()]
+        new_cols = [
+            ("meaning", "TEXT NOT NULL DEFAULT ''"),
+            ("hint", "TEXT NOT NULL DEFAULT ''"),
+            ("example_sentence", "TEXT NOT NULL DEFAULT ''"),
+            ("example_translation", "TEXT NOT NULL DEFAULT ''"),
+            ("image", "TEXT NOT NULL DEFAULT ''"),
+            ("audio", "TEXT NOT NULL DEFAULT ''"),
+            ("tags", "TEXT NOT NULL DEFAULT ''"),
+            ("notes", "TEXT NOT NULL DEFAULT ''"),
+        ]
+        for col_name, col_def in new_cols:
+            if col_name not in columns:
+                conn.execute(f"ALTER TABLE cards ADD COLUMN {col_name} {col_def}")
         conn.commit()

@@ -12,14 +12,84 @@
       <span class="eyebrow">ANKIMINER</span>
       <button id="mining-toggle" type="button" aria-pressed="false">Start mining</button>
     </header>
-    <p id="mode" class="status">Mining mode is off.</p>
+    <div class="session-bar">
+      <p id="mode" class="status">Mining mode is off.</p>
+      <span id="session-count" class="session-counter">Cards this session: 0</span>
+    </div>
     <section aria-live="polite">
       <div class="capture-header">
         <p id="capture-status" class="status">Select Japanese text after starting mining.</p>
         <span id="save-badge" class="badge" hidden></span>
       </div>
-      <h1 id="expression">—</h1>
-      <p id="reading" class="reading"></p>
+
+      <!-- Hidden reference elements for compatibility with existing tests checking textContent -->
+      <h1 id="expression" class="visually-hidden">—</h1>
+      <p id="reading" class="reading visually-hidden"></p>
+
+      <!-- Card Editor Form -->
+      <form id="card-editor" class="card-editor" hidden>
+        <input type="hidden" id="field-card-id" name="id">
+        <input type="hidden" id="field-deck-name" name="deck_name" value="Default">
+        <input type="hidden" id="field-source-text" name="source_text">
+        <input type="hidden" id="field-deinflected-text" name="deinflected_text">
+
+        <div class="form-group">
+          <label for="field-expression">Expression</label>
+          <input type="text" id="field-expression" name="expression" required autocomplete="off">
+        </div>
+
+        <div class="form-group">
+          <label for="field-reading">Reading</label>
+          <input type="text" id="field-reading" name="reading" autocomplete="off">
+        </div>
+
+        <div class="form-group">
+          <label for="field-meaning">Meaning</label>
+          <textarea id="field-meaning" name="meaning" rows="2"></textarea>
+        </div>
+
+        <div class="optional-toggle-container">
+          <button type="button" id="toggle-optional" class="btn-toggle-optional" aria-expanded="false">
+            + Optional fields
+          </button>
+        </div>
+
+        <div id="optional-fields" class="optional-fields" hidden>
+          <div class="form-group">
+            <label for="field-hint">Hint</label>
+            <input type="text" id="field-hint" name="hint" autocomplete="off">
+          </div>
+          <div class="form-group">
+            <label for="field-example-sentence">Example sentence</label>
+            <textarea id="field-example-sentence" name="example_sentence" rows="2"></textarea>
+          </div>
+          <div class="form-group">
+            <label for="field-example-translation">Example translation</label>
+            <textarea id="field-example-translation" name="example_translation" rows="2"></textarea>
+          </div>
+          <div class="form-group">
+            <label for="field-image">Image</label>
+            <input type="text" id="field-image" name="image" placeholder="URL or path" autocomplete="off">
+          </div>
+          <div class="form-group">
+            <label for="field-audio">Audio</label>
+            <input type="text" id="field-audio" name="audio" placeholder="URL or path" autocomplete="off">
+          </div>
+          <div class="form-group">
+            <label for="field-tags">Tags</label>
+            <input type="text" id="field-tags" name="tags" placeholder="e.g. n5, verbs" autocomplete="off">
+          </div>
+          <div class="form-group">
+            <label for="field-notes">Notes</label>
+            <textarea id="field-notes" name="notes" rows="2"></textarea>
+          </div>
+        </div>
+
+        <div class="editor-actions">
+          <button type="submit" id="save-card-btn" class="btn-save">Save Card</button>
+        </div>
+      </form>
+
       <div id="meanings" class="details"></div>
       <div id="examples" class="details"></div>
     </section>

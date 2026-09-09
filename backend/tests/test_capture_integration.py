@@ -66,7 +66,7 @@ class CaptureIntegrationTests(unittest.TestCase):
     def test_1_new_capture_saved(self, mock_yomitan_cls):
         mock_yomitan_cls.return_value = self._mock_yomitan("映画", "えいが")
 
-        response = self.client.post("/api/capture", json={"text": "映画", "deck_name": "Default"})
+        response = self.client.post("/api/capture", json={"text": "映画", "deck_name": "Default", "auto_save": True})
         self.assertEqual(response.status_code, 200)
 
         data = response.json()
@@ -89,14 +89,14 @@ class CaptureIntegrationTests(unittest.TestCase):
         mock_yomitan_cls.return_value = self._mock_yomitan("映画", "えいが")
 
         # First capture
-        res1 = self.client.post("/api/capture", json={"text": "映画", "deck_name": "Default"})
+        res1 = self.client.post("/api/capture", json={"text": "映画", "deck_name": "Default", "auto_save": True})
         self.assertEqual(res1.status_code, 200)
         data1 = res1.json()
         self.assertFalse(data1["is_duplicate"])
         self.assertEqual(data1["status"], "saved")
 
         # Second capture of same term
-        res2 = self.client.post("/api/capture", json={"text": "映画", "deck_name": "Default"})
+        res2 = self.client.post("/api/capture", json={"text": "映画", "deck_name": "Default", "auto_save": True})
         self.assertEqual(res2.status_code, 200)
         data2 = res2.json()
 
@@ -113,13 +113,13 @@ class CaptureIntegrationTests(unittest.TestCase):
         mock_yomitan_cls.return_value = self._mock_yomitan("映画", "えいが")
 
         # Capture in Default deck
-        res1 = self.client.post("/api/capture", json={"text": "映画", "deck_name": "Default"})
+        res1 = self.client.post("/api/capture", json={"text": "映画", "deck_name": "Default", "auto_save": True})
         self.assertEqual(res1.status_code, 200)
         data1 = res1.json()
         self.assertFalse(data1["is_duplicate"])
 
         # Capture in Anime deck
-        res2 = self.client.post("/api/capture", json={"text": "映画", "deck_name": "Anime"})
+        res2 = self.client.post("/api/capture", json={"text": "映画", "deck_name": "Anime", "auto_save": True})
         self.assertEqual(res2.status_code, 200)
         data2 = res2.json()
         self.assertFalse(data2["is_duplicate"])

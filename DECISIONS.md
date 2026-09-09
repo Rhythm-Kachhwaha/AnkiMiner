@@ -16,3 +16,11 @@
 - **SQLite local persistence behind repository boundary**: Implemented `CardRepository` managing SQLite cards persistence with WAL mode and foreign key pragmas enabled. Database operations are strictly isolated from FastAPI routes and extension code.
 - **Locked duplicate identity & centralized normalization**: Duplicate identity is strictly `(normalized_expression, normalized_reading, normalized_deck_name)`. Normalization standardizes Unicode NFC, collapses and strips ASCII/full-width (`\u3000`) whitespace, and defaults missing deck names to `"Default"`. A SQLite `UNIQUE(normalized_expression, normalized_reading, normalized_deck_name)` constraint and index guarantee duplicate prevention and race safety.
 - **Backend-owned lifecycle and minimal Side Panel state**: The backend decides card lifecycle transitions: inserting new rows only when not duplicate, and returning existing records with `is_duplicate: true` and `status: "already_saved"` when duplicate. The Side Panel reflects this with `[SAVED]` vs `[ALREADY SAVED]` pills styled according to `DESIGN.md`.
+
+## Card Editor & Explicit Save Workflow (Phase 3.3)
+
+- **Selection-to-Draft decoupling**: Selection capture creates an ephemeral `CardDraft` rather than immediately persisting to SQLite. Text selection invokes `/api/capture` with `auto_save: false` to enrich via Yomitan and populate the editor. If the term already exists in SQLite, the existing card is loaded instead.
+- **Backend-governed explicit persistence**: The user must explicitly submit the card via `POST /api/cards/save`. The backend validates the card, checks duplicate identity, inserts new records or updates existing rows in place without altering duplicate identity, returning `is_new` and `is_updated` lifecycle flags.
+- **Compact developer-utility UI with progressive disclosure**: Side Panel card editor keeps core fields (`Expression`, `Reading`, `Meaning`) immediately editable while stowing optional fields (`Hint`, `Example sentence`, `Example translation`, `Image`, `Audio`, `Tags`, `Notes`) behind a collapsible toggle.
+- **Frontend session counter**: Tracked in Side Panel session state, starting at 0, incrementing strictly on `is_new: true` card saves, and remaining unaffected by existing-card loads, edits, or duplicate captures.
+
