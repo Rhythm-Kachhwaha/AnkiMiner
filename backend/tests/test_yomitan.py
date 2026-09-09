@@ -33,6 +33,6 @@ class YomitanNormalizationTests(unittest.TestCase):
     def test_remote_disconnected_raises_unavailable_not_500(self):
         """RemoteDisconnected (OSError, not URLError) must not escape as a bare exception."""
         service = YomitanService()
-        with patch("urllib.request.urlopen", side_effect=http.client.RemoteDisconnected("closed")):
+        with patch("app.services.yomitan.urlopen", side_effect=http.client.RemoteDisconnected("closed")):
             with self.assertRaises(YomitanUnavailableError):
                 service._post_json("/tokenize", {"text": "映画"})
