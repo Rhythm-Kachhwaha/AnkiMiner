@@ -1,19 +1,18 @@
 import unittest
-
 from app.services.yomitan import YomitanResponseError, YomitanService
 
-
 class YomitanNormalizationTests(unittest.TestCase):
-    def test_normalizes_first_token(self):
-        term = YomitanService.normalize_tokenize_response([{"content": [[{"text": "映画", "reading": "えいが"}]]}])
-        self.assertEqual((term.expression, term.reading), ("映画", "えいが"))
+    def test_uses_dictionary_headword_and_deinflection_not_fragment(self):
+        payload=[{"content":[[{"text":"見","reading":"み","headwords":[[{"term":"見る","reading":"みる","sources":[{"originalText":"見た","deinflectedText":"見る"}]}]]}]]}]
+        term=YomitanService.normalize_tokenize_response(payload,"見た")
+        self.assertEqual((term.expression,term.reading,term.source_text,term.deinflected_text),("見る","みる","見た","見る"))
 
-    def test_allows_empty_reading_from_scanning_parser(self):
-        term = YomitanService.normalize_tokenize_response([{"content": [[{"text": "映画", "reading": ""}]]}])
-        self.assertEqual((term.expression, term.reading), ("映画", ""))
+    def test_supports_hiragana_katakana_and_kanji_tokens(self):
+        for text in ("映画","こんにちは","カメラ"):
+            payload=[{"content":[[{"text":text,"reading":"","headwords":[[{"term":text,"reading":text,"sources":[{"originalText":text,"deinflectedText":text}]}]]}]]}]
+            self.assertEqual(YomitanService.normalize_tokenize_response(payload,text).expression,text)
 
     def test_rejects_empty_or_malformed_responses(self):
-        for payload in ([], {}, [{"content": [[]]}], [{"content": [[{"reading": "えいが"}]]}]):
+        for payload in ([],{},[{"content":[[]]}],[{"content":[[{"reading":"えいが"}]]}]):
             with self.subTest(payload=payload):
-                with self.assertRaises(YomitanResponseError):
-                    YomitanService.normalize_tokenize_response(payload)
+                with self.assertRaises(YomitanResponseError): YomitanService.normalize_tokenize_response(payload)
