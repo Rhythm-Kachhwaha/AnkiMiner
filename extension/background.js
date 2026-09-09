@@ -1,11 +1,62 @@
-chrome.runtime.onInstalled.addListener(() => chrome.sidePanel.setPanelBehavior({openPanelOnActionClick:true}).catch(() => {}));
-async function activeTab(){const [tab]=await chrome.tabs.query({active:true,lastFocusedWindow:true});return tab;}
-async function ensureContentScript(tabId){try{await chrome.tabs.sendMessage(tabId,{type:"PING_ANKI_MINER"});}catch{await chrome.scripting.executeScript({target:{tabId},files:["content/capture-utils.js","content/content.js"]});}}
-chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
-  if(message?.type==="SET_MINING_MODE"){
-    activeTab().then(async tab=>{if(!tab?.id)throw new Error("No active tab is available.");await ensureContentScript(tab.id);await chrome.tabs.sendMessage(tab.id,{type:"MINING_MODE_CHANGED",enabled:message.enabled});sendResponse({ok:true,stage:"content-script"});}).catch(error=>sendResponse({ok:false,stage:"content-script",error:`Capture setup failed: ${error.message}`}));return true;
+let isMiningModeEnabled = false;
+
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.sidePanel.setPanelBehavior({openPanelOnActionClick: true}).catch(() => {});
+});
+
+async function activeTab() {
+  const [tab] = await chrome.tabs.query({active: true, lastFocusedWindow: true});
+  return tab;
+}
+
+async function ensureContentScript(tabId) {
+  try {
+    await chrome.tabs.sendMessage(tabId, {type: "PING_ANKI_MINER"});
+  } catch {
+    await chrome.scripting.executeScript({
+      target: {tabId},
+      files: ["content/capture-utils.js", "content/content.js"]
+    });
   }
-  if(message?.type==="JAPANESE_TEXT_CAPTURED"){
-    chrome.runtime.sendMessage({...message,tabId:sender.tab?.id}).then(()=>sendResponse({ok:true,stage:"side-panel"})).catch(error=>sendResponse({ok:false,stage:"side-panel",error:`Side Panel did not receive capture: ${error.message}`}));return true;
+}
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === "SET_MINING_MODE") {
+    isMiningModeEnabled = Boolean(message.enabled);
+    chrome.tabs.query({}).then(tabs => {
+      for (const tab of tabs) {
+        if (tab?.id && tab?.url && !tab.url.startsWith("chrome://")) {
+          chrome.tabs.sendMessage(tab.id, {type: "MINING_MODE_CHANGED", enabled: isMiningModeEnabled}).catch(() => {});
+        }
+      }
+    }).catch(() => {});
+    activeTab().then(async tab => {
+      if (tab?.id) {
+        await ensureContentScript(tab.id);
+        await chrome.tabs.sendMessage(tab.id, {type: "MINING_MODE_CHANGED", enabled: isMiningModeEnabled}).catch(() => {});
+      }
+    }).catch(() => {});
+    sendResponse({ok: true, stage: "content-script"});
+    return true;
+  }
+  if (message?.type === "GET_MINING_MODE") {
+    sendResponse({ok: true, enabled: isMiningModeEnabled});
+    return true;
+  }
+});
+
+chrome.tabs.onActivated.addListener(activeInfo => {
+  if (isMiningModeEnabled && activeInfo?.tabId) {
+    ensureContentScript(activeInfo.tabId).then(() => {
+      chrome.tabs.sendMessage(activeInfo.tabId, {type: "MINING_MODE_CHANGED", enabled: true}).catch(() => {});
+    }).catch(() => {});
+  }
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (isMiningModeEnabled && changeInfo.status === "complete" && tab?.url && !tab.url.startsWith("chrome://")) {
+    ensureContentScript(tabId).then(() => {
+      chrome.tabs.sendMessage(tabId, {type: "MINING_MODE_CHANGED", enabled: true}).catch(() => {});
+    }).catch(() => {});
   }
 });

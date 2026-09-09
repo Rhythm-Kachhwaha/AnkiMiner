@@ -12,6 +12,15 @@ class YomitanNormalizationTests(unittest.TestCase):
             payload=[{"content":[[{"text":text,"reading":"","headwords":[[{"term":text,"reading":text,"sources":[{"originalText":text,"deinflectedText":text}]}]]}]]}]
             self.assertEqual(YomitanService.normalize_tokenize_response(payload,text).expression,text)
 
+    def test_ignores_punctuation_tokens_and_extracts_headword(self):
+        payload = [{"content": [[
+            {"text": "「", "reading": ""},
+            {"text": "映画", "reading": "えいが", "headwords": [[{"term": "映画", "reading": "えいが", "sources": [{"originalText": "映画", "deinflectedText": "映画"}]}]]},
+            {"text": "」", "reading": ""}
+        ]]}]
+        term = YomitanService.normalize_tokenize_response(payload, "「映画」")
+        self.assertEqual((term.expression, term.reading), ("映画", "えいが"))
+
     def test_rejects_empty_or_malformed_responses(self):
         for payload in ([],{},[{"content":[[]]}],[{"content":[[{"reading":"えいが"}]]}]):
             with self.subTest(payload=payload):

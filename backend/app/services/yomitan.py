@@ -73,6 +73,7 @@ class YomitanService:
     @staticmethod
     def normalize_tokenize_response(payload: Any, source_text: str = "") -> IdentifiedTerm:
         if not isinstance(payload, list): raise YomitanResponseError("Yomitan returned an invalid response.")
+        first_text_fallback: IdentifiedTerm | None = None
         for result in payload:
             for segment in result.get("content", []) if isinstance(result, dict) else []:
                 for token in segment if isinstance(segment, list) else []:
@@ -82,8 +83,11 @@ class YomitanService:
                         term, reading, source, deinflected = headword
                         return IdentifiedTerm(term, reading, source or source_text.strip() or term, deinflected or term)
                     text, reading = token.get("text"), token.get("reading", "")
-                    if isinstance(text, str) and text.strip() and isinstance(reading, str):
-                        return IdentifiedTerm(text.strip(), reading.strip(), source_text.strip() or text.strip(), text.strip())
+                    if first_text_fallback is None and isinstance(text, str) and text.strip() and isinstance(reading, str):
+                        if any("\u3040" <= ch <= "\u9fff" or "\uf900" <= ch <= "\ufaff" or ch == "\u3005" for ch in text):
+                            first_text_fallback = IdentifiedTerm(text.strip(), reading.strip(), source_text.strip() or text.strip(), text.strip())
+        if first_text_fallback is not None:
+            return first_text_fallback
         raise YomitanResponseError("Yomitan could not identify a Japanese term in this selection.")
 
     @staticmethod
