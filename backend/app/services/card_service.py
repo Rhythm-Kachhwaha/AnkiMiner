@@ -7,6 +7,7 @@ from typing import Any
 from app.repositories.card_repository import CardDraft, CardRecord, CardRepository
 from app.schemas import (
     AnkiDecksResponse,
+    AnkiModelsResponse,
     AnkiStatusResponse,
     CaptureResponse,
     DictionaryEntry,
@@ -86,6 +87,7 @@ class CardService:
                 entries=entries_data,
                 dictionary_error=enriched.dictionary_error,
                 deck_name=existing.deck_name,
+                model_name=existing.model_name,
                 status="already_saved",
                 sync_status=existing.sync_status,
                 anki_note_id=existing.anki_note_id,
@@ -114,6 +116,7 @@ class CardService:
             entries=serialized_entries,
             dictionary_error=enriched.dictionary_error,
             deck_name=deck_name,
+            model_name="",
             status="draft",
             sync_status="pending",
             anki_note_id=None,
@@ -145,6 +148,7 @@ class CardService:
             source_text=request.source_text,
             deinflected_text=request.deinflected_text,
             deck_name=request.deck_name,
+            model_name=request.model_name,
             status="saved",
             id=request.id,
         )
@@ -167,6 +171,7 @@ class CardService:
             source_text=record.source_text,
             deinflected_text=record.deinflected_text,
             deck_name=record.deck_name,
+            model_name=record.model_name,
             status=status,
             sync_status=record.sync_status,
             anki_note_id=record.anki_note_id,
@@ -245,6 +250,7 @@ class CardService:
             entries=entries_data,
             dictionary_error=enriched.dictionary_error,
             deck_name=card_record.deck_name,
+            model_name=card_record.model_name,
             status=status,
             sync_status=card_record.sync_status,
             anki_note_id=card_record.anki_note_id,
@@ -275,6 +281,7 @@ class CardService:
                 sync_status="synced",
                 anki_note_id=card.anki_note_id,
                 deck_name=card.deck_name,
+                model_name=card.model_name or None,
                 synced_at=card.synced_at,
             )
 
@@ -296,6 +303,7 @@ class CardService:
                     sync_status="synced",
                     anki_note_id=existing_note_id,
                     deck_name=card.deck_name,
+                    model_name=card.model_name or None,
                     synced_at=updated.synced_at if updated else None,
                 )
 
@@ -314,10 +322,13 @@ class CardService:
             }
             tags_list = [t.strip() for t in card.tags.split(",") if t.strip()] if card.tags else []
 
+            explicit_model = card.model_name.strip() if card.model_name and card.model_name.strip() else None
+
             new_note_id = self.anki.add_note(
                 deck_name=card.deck_name,
                 card_data=card_data,
                 tags=tags_list,
+                model_name=explicit_model,
             )
 
             updated = self.repository.mark_synced(card_id, new_note_id)
@@ -326,6 +337,7 @@ class CardService:
                 sync_status="synced",
                 anki_note_id=new_note_id,
                 deck_name=card.deck_name,
+                model_name=explicit_model,
                 synced_at=updated.synced_at if updated else None,
             )
 
@@ -337,6 +349,7 @@ class CardService:
                 sync_status="failed",
                 anki_note_id=card.anki_note_id,
                 deck_name=card.deck_name,
+                model_name=card.model_name or None,
                 error=error_message,
                 synced_at=card.synced_at,
             )
@@ -361,4 +374,14 @@ class CardService:
             return AnkiDecksResponse(decks=decks, connected=True)
         except Exception:
             return AnkiDecksResponse(decks=["Default"], connected=False)
+
+    def get_anki_models(self) -> AnkiModelsResponse:
+        """Retrieve model/note-type list from AnkiConnect or fallback to ['Basic']."""
+        try:
+            models = self.anki.get_model_names()
+            if not models:
+                models = ["Basic"]
+            return AnkiModelsResponse(models=models, connected=True)
+        except Exception:
+            return AnkiModelsResponse(models=["Basic"], connected=False)
 

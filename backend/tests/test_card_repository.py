@@ -125,6 +125,44 @@ class CardRepositoryTests(unittest.TestCase):
 
         self.assertEqual(self.repo.count(), 1)
 
+    def test_8_model_name_persistence_and_update(self):
+        # 1. New card with explicit model_name
+        draft = CardDraft(
+            expression="約束",
+            reading="やくそく",
+            deck_name="Japanese",
+            model_name="Japanese Mining Model",
+        )
+        card, is_new, is_dup, is_upd = self.repo.save_or_update(draft)
+        self.assertTrue(is_new)
+        self.assertEqual(card.model_name, "Japanese Mining Model")
+
+        # 2. Retrieve by ID
+        fetched = self.repo.get_by_id(card.id)
+        self.assertIsNotNone(fetched)
+        self.assertEqual(fetched.model_name, "Japanese Mining Model")
+
+        # 3. Retrieve by identity
+        by_ident = self.repo.find_by_identity("約束", "やくそく", "Japanese")
+        self.assertIsNotNone(by_ident)
+        self.assertEqual(by_ident.model_name, "Japanese Mining Model")
+
+        # 4. Update card with a different model_name
+        update_draft = CardDraft(
+            id=card.id,
+            expression="約束",
+            reading="やくそく",
+            deck_name="Japanese",
+            model_name="Basic (and reversed card)",
+        )
+        updated_card, is_new2, is_dup2, is_upd2 = self.repo.save_or_update(update_draft)
+        self.assertTrue(is_upd2)
+        self.assertEqual(updated_card.model_name, "Basic (and reversed card)")
+
+        # Verify persisted in DB
+        refetched = self.repo.get_by_id(card.id)
+        self.assertEqual(refetched.model_name, "Basic (and reversed card)")
+
 
 if __name__ == "__main__":
     unittest.main()

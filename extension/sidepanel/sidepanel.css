@@ -455,8 +455,10 @@ body {
 }
 
 .font-selector-group,
-.deck-selector-group {
+.deck-selector-group,
+.model-selector-group {
   flex: 1;
+  min-width: 0;
 }
 
 .optional-toggle-container {

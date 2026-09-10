@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.db.connection import init_db
 from app.schemas import (
     AnkiDecksResponse,
+    AnkiModelsResponse,
     AnkiStatusResponse,
     CaptureRequest,
     CaptureResponse,
@@ -60,6 +61,12 @@ def get_anki_status() -> AnkiStatusResponse:
 def get_anki_decks() -> AnkiDecksResponse:
     service = CardService()
     return service.get_anki_decks()
+
+
+@app.get("/api/anki/models", response_model=AnkiModelsResponse)
+def get_anki_models() -> AnkiModelsResponse:
+    service = CardService()
+    return service.get_anki_models()
 
 
 @app.post("/api/cards/{card_id}/sync", response_model=SyncCardResponse)

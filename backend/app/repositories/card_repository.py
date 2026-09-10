@@ -27,6 +27,7 @@ class CardDraft:
     source_text: str = ""
     deinflected_text: str = ""
     deck_name: str = "Default"
+    model_name: str = ""
     entries: list[Any] = field(default_factory=list)
     examples: list[Any] = field(default_factory=list)
     status: str = "saved"
@@ -61,6 +62,7 @@ class CardRecord:
     status: str
     created_at: str
     updated_at: str
+    model_name: str = ""
     sync_status: str = "pending"
     anki_note_id: int | None = None
     sync_error: str = ""
@@ -124,6 +126,7 @@ def _row_to_record(row: sqlite3.Row) -> CardRecord:
         status=row["status"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+        model_name=_get("model_name", ""),
         sync_status=_get("sync_status", "pending"),
         anki_note_id=anki_note_id,
         sync_error=_get("sync_error", ""),
@@ -147,7 +150,7 @@ class CardRepository:
             row = conn.execute(
                 """
                 SELECT id, expression, reading, meaning, hint, example_sentence, example_translation,
-                       image, audio, tags, notes, source_text, deinflected_text, deck_name,
+                       image, audio, tags, notes, source_text, deinflected_text, deck_name, model_name,
                        normalized_expression, normalized_reading, normalized_deck_name,
                        meanings_json, examples_json, status, created_at, updated_at,
                        sync_status, anki_note_id, sync_error, synced_at
@@ -166,7 +169,7 @@ class CardRepository:
             row = conn.execute(
                 """
                 SELECT id, expression, reading, meaning, hint, example_sentence, example_translation,
-                       image, audio, tags, notes, source_text, deinflected_text, deck_name,
+                       image, audio, tags, notes, source_text, deinflected_text, deck_name, model_name,
                        normalized_expression, normalized_reading, normalized_deck_name,
                        meanings_json, examples_json, status, created_at, updated_at,
                        sync_status, anki_note_id, sync_error, synced_at
@@ -229,6 +232,7 @@ class CardRepository:
                             tags = ?,
                             notes = ?,
                             deck_name = ?,
+                            model_name = ?,
                             normalized_expression = ?,
                             normalized_reading = ?,
                             normalized_deck_name = ?,
@@ -247,6 +251,7 @@ class CardRepository:
                             draft.tags,
                             draft.notes,
                             normalize_deck(draft.deck_name),
+                            draft.model_name or "",
                             norm_expr,
                             norm_read,
                             norm_deck,
@@ -269,11 +274,11 @@ class CardRepository:
                     """
                     INSERT INTO cards (
                         expression, reading, meaning, hint, example_sentence, example_translation,
-                        image, audio, tags, notes, source_text, deinflected_text, deck_name,
+                        image, audio, tags, notes, source_text, deinflected_text, deck_name, model_name,
                         normalized_expression, normalized_reading, normalized_deck_name,
                         meanings_json, examples_json, status, sync_status, anki_note_id,
                         sync_error, synced_at, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         draft.expression,
@@ -289,6 +294,7 @@ class CardRepository:
                         draft.source_text,
                         draft.deinflected_text,
                         normalize_deck(draft.deck_name),
+                        draft.model_name or "",
                         norm_expr,
                         norm_read,
                         norm_deck,
@@ -386,7 +392,7 @@ class CardRepository:
             rows = conn.execute(
                 """
                 SELECT id, expression, reading, meaning, hint, example_sentence, example_translation,
-                       image, audio, tags, notes, source_text, deinflected_text, deck_name,
+                       image, audio, tags, notes, source_text, deinflected_text, deck_name, model_name,
                        normalized_expression, normalized_reading, normalized_deck_name,
                        meanings_json, examples_json, status, created_at, updated_at,
                        sync_status, anki_note_id, sync_error, synced_at
@@ -409,4 +415,5 @@ class CardRepository:
             "sync_error": card.sync_error,
             "synced_at": card.synced_at,
             "deck_name": card.deck_name,
+            "model_name": card.model_name,
         }

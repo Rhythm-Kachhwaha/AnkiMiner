@@ -87,6 +87,7 @@ class TestSyncLifecycle:
         assert card is not None
         assert card.expression == "猫"
         assert card.sync_status == "pending"
+        assert card.model_name == ""
         assert card.anki_note_id is None
         assert card.sync_error == ""
         assert card.synced_at is None
@@ -265,12 +266,28 @@ class TestSyncLifecycle:
                     assert "Default" in data["decks"]
                     assert data["connected"] is False
 
+                # 2b. Models endpoint with Anki unavailable falls back to Basic
+                with patch("app.services.card_service.AnkiConnectService.get_model_names", side_effect=AnkiConnectionError("Refused")):
+                    resp = client.get("/api/anki/models")
+                    assert resp.status_code == 200
+                    data = resp.json()
+                    assert data["models"] == ["Basic"]
+                    assert data["connected"] is False
+
                 # 3. Decks endpoint with Anki available
                 with patch("app.services.card_service.AnkiConnectService.list_decks", return_value=["Default", "MiningDeck"]):
                     resp = client.get("/api/anki/decks")
                     assert resp.status_code == 200
                     data = resp.json()
                     assert data["decks"] == ["Default", "MiningDeck"]
+                    assert data["connected"] is True
+
+                # 3b. Models endpoint with Anki available
+                with patch("app.services.card_service.AnkiConnectService.get_model_names", return_value=["Basic", "Japanese (mining)"]):
+                    resp = client.get("/api/anki/models")
+                    assert resp.status_code == 200
+                    data = resp.json()
+                    assert data["models"] == ["Basic", "Japanese (mining)"]
                     assert data["connected"] is True
 
                 # 4. Save card via API
@@ -294,3 +311,116 @@ class TestSyncLifecycle:
                 # 6. Non-existent card returns 404
                 not_found_resp = client.post("/api/cards/999999/sync")
                 assert not_found_resp.status_code == 404
+
+    def test_sync_card_with_explicit_model_name_uses_that_model(self, temp_db):
+        repo = CardRepository(temp_db)
+        mock_anki = MagicMock(spec=AnkiConnectService)
+        mock_anki.find_existing_note.return_value = None
+        mock_anki.add_note.return_value = 554433
+
+        service = CardService(card_repository=repo, anki_service=mock_anki)
+        saved = service.save_card(SaveCardRequest(
+            expression="約束",
+            reading="やくそく",
+            meaning="promise",
+            model_name="Mining Japanese Vocab",
+        ))
+        assert saved.model_name == "Mining Japanese Vocab"
+
+        sync_result = service.sync_card(saved.id)
+        assert sync_result.sync_status == "synced"
+        assert sync_result.anki_note_id == 554433
+        assert sync_result.model_name == "Mining Japanese Vocab"
+
+        # Assert add_note was called with explicit model_name
+        mock_anki.add_note.assert_called_once()
+        _, kwargs = mock_anki.add_note.call_args
+        assert kwargs["model_name"] == "Mining Japanese Vocab"
+
+    def test_sync_card_without_model_name_uses_none_for_automatic_resolution(self, temp_db):
+        repo = CardRepository(temp_db)
+        mock_anki = MagicMock(spec=AnkiConnectService)
+        mock_anki.find_existing_note.return_value = None
+        mock_anki.add_note.return_value = 112233
+
+        service = CardService(card_repository=repo, anki_service=mock_anki)
+        # Card with no model_name (default empty string)
+        saved = service.save_card(SaveCardRequest(
+            expression="月",
+            reading="つき",
+            meaning="moon",
+        ))
+        assert saved.model_name == ""
+
+        sync_result = service.sync_card(saved.id)
+        assert sync_result.sync_status == "synced"
+        assert sync_result.anki_note_id == 112233
+
+        # Assert add_note was called with model_name=None so automatic resolution triggers
+        mock_anki.add_note.assert_called_once()
+        _, kwargs = mock_anki.add_note.call_args
+        assert kwargs["model_name"] is None
+
+    def test_card_service_get_anki_models_connected(self, temp_db):
+        repo = CardRepository(temp_db)
+        mock_anki = MagicMock(spec=AnkiConnectService)
+        mock_anki.get_model_names.return_value = ["Basic", "Japanese Vocab"]
+
+        service = CardService(card_repository=repo, anki_service=mock_anki)
+        res = service.get_anki_models()
+        assert res.connected is True
+        assert res.models == ["Basic", "Japanese Vocab"]
+
+    def test_card_service_get_anki_models_offline_fallback(self, temp_db):
+        repo = CardRepository(temp_db)
+        mock_anki = MagicMock(spec=AnkiConnectService)
+        mock_anki.get_model_names.side_effect = AnkiConnectionError("Connection refused")
+
+        service = CardService(card_repository=repo, anki_service=mock_anki)
+        res = service.get_anki_models()
+        assert res.connected is False
+        assert res.models == ["Basic"]
+
+    def test_phase6_end_to_end_note_model_workflow(self, temp_db):
+        """End-to-end Phase 6 verification: discover note models -> save with model -> sync to Anki."""
+        client = TestClient(app)
+
+        with patch("app.main.init_db"):
+            with patch.dict(os.environ, {"ANKIMINER_DB_PATH": str(temp_db)}):
+                # 1. Discover models via API
+                with patch("app.services.card_service.AnkiConnectService.get_model_names", return_value=["Basic", "Japanese Mining Note"]):
+                    model_resp = client.get("/api/anki/models")
+                    assert model_resp.status_code == 200
+                    models = model_resp.json()["models"]
+                    assert "Japanese Mining Note" in models
+
+                # 2. Save card with selected model
+                save_resp = client.post(
+                    "/api/cards/save",
+                    json={
+                        "expression": "約束",
+                        "reading": "やくそく",
+                        "meaning": "promise",
+                        "deck_name": "Japanese",
+                        "model_name": "Japanese Mining Note",
+                    },
+                )
+                assert save_resp.status_code == 200
+                card_data = save_resp.json()
+                assert card_data["model_name"] == "Japanese Mining Note"
+                card_id = card_data["id"]
+
+                # 3. Synchronize card to Anki
+                with patch("app.services.card_service.AnkiConnectService.find_existing_note", return_value=None), \
+                     patch("app.services.card_service.AnkiConnectService.add_note", return_value=777888) as mock_add_note:
+                    sync_resp = client.post(f"/api/cards/{card_id}/sync")
+                    assert sync_resp.status_code == 200
+                    sync_data = sync_resp.json()
+                    assert sync_data["sync_status"] == "synced"
+                    assert sync_data["anki_note_id"] == 777888
+                    assert sync_data["model_name"] == "Japanese Mining Note"
+
+                    # Verify exact model_name was forwarded to add_note
+                    mock_add_note.assert_called_once()
+                    _, kwargs = mock_add_note.call_args
+                    assert kwargs["model_name"] == "Japanese Mining Note"

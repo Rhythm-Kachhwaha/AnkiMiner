@@ -65,6 +65,7 @@
       <form id="card-editor" class="card-editor" hidden>
         <input type="hidden" id="field-card-id" name="id">
         <input type="hidden" id="field-deck-name" name="deck_name" value="Default">
+        <input type="hidden" id="field-model-name" name="model_name" value="">
         <input type="hidden" id="field-source-text" name="source_text">
         <input type="hidden" id="field-deinflected-text" name="deinflected_text">
 
@@ -84,21 +85,28 @@
         </div>
 
         <div class="form-row-compact">
-          <div class="form-group font-selector-group">
-            <label for="field-font-select">Font</label>
-            <select id="field-font-select" name="font_select">
-              <option value="Noto Sans JP">Noto Sans Japanese</option>
-              <option value="Noto Serif JP">Noto Serif Japanese</option>
-              <option value="system-ui">System Default</option>
-            </select>
-          </div>
-
           <div class="form-group deck-selector-group">
             <label for="field-deck-select">Deck</label>
             <select id="field-deck-select" name="deck_select">
               <option value="Default">Default</option>
             </select>
           </div>
+
+          <div class="form-group model-selector-group">
+            <label for="field-model-select">Note Type</label>
+            <select id="field-model-select" name="model_select">
+              <option value="Basic">Basic</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="form-group font-selector-group">
+          <label for="field-font-select">Font</label>
+          <select id="field-font-select" name="font_select">
+            <option value="Noto Sans JP">Noto Sans Japanese</option>
+            <option value="Noto Serif JP">Noto Serif Japanese</option>
+            <option value="system-ui">System Default</option>
+          </select>
         </div>
 
         <div class="optional-toggle-container">

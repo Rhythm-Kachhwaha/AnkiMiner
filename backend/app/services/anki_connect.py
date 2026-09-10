@@ -296,10 +296,11 @@ class AnkiConnectService:
     def map_card_to_fields(self, card: dict[str, Any], model_fields: list[str]) -> dict[str, str]:
         """
         Deterministically map card fields to the model's fields.
-        Supports standard Japanese fields as well as Basic (Front/Back).
+        Supports standard Japanese fields, community templates (Yomitan, Core 2k/6k, Kaishi),
+        as well as Basic (Front/Back).
         """
         field_map: dict[str, str] = {}
-        fields_lower = {f.lower().replace(" ", "").replace("_", ""): f for f in model_fields}
+        fields_lower = {f.lower().replace(" ", "").replace("_", "").replace("-", ""): f for f in model_fields}
 
         expr = card.get("expression", "")
         reading = card.get("reading", "")
@@ -356,19 +357,21 @@ class AnkiConnectService:
                         field_map[real_name] = value
                         return
 
-        assign(("expression", "japanese", "word", "front", "kanji"), expr)
-        assign(("reading", "furigana", "kana"), reading)
-        assign(("meaning", "glossary", "english", "definition", "back"), meaning)
+        assign(("expression", "japanese", "word", "front", "kanji", "vocabkanji", "vocab"), expr)
+        assign(("reading", "furigana", "kana", "vocabfurigana", "vocabreading"), reading)
+        assign(("meaning", "glossary", "english", "definition", "back", "vocabdef", "vocabmeaning"), meaning)
         assign(("hint",), hint)
-        assign(("examplesentence", "example", "sentence"), example)
-        assign(("exampletranslation", "translation"), example_trans)
-        assign(("notes", "note"), notes)
-        assign(("image", "picture"), card.get("image", ""))
-        assign(("audio", "sound"), card.get("audio", ""))
+        assign(("examplesentence", "sentenceexpression", "sentence", "sentences", "example", "examples"), example)
+        assign(("exampletranslation", "sentencetranslation", "sentenceenglish", "examplesentencemeaning", "translation"), example_trans)
+        assign(("notes", "note", "comment"), notes)
+        assign(("image", "picture", "sentenceimage"), card.get("image", ""))
+        assign(("audio", "sound", "sentenceaudio"), card.get("audio", ""))
 
         # Ensure at least the first model field is populated
         if model_fields and model_fields[0] not in field_map:
             field_map[model_fields[0]] = expr
+        if len(model_fields) > 1 and model_fields[1] not in field_map and meaning:
+            field_map[model_fields[1]] = meaning
 
         return field_map
 
@@ -377,21 +380,27 @@ class AnkiConnectService:
         deck_name: str,
         card_data: dict[str, Any],
         tags: list[str] | None = None,
+        model_name: str | None = None,
     ) -> int:
         """
         Add a note to AnkiConnect in the specified deck.
-        Creates deck if missing, resolves note model, maps fields, and creates note.
+        Creates deck if missing, resolves note model (or uses specified model), maps fields, and creates note.
         Returns the new note ID.
         """
         clean_deck = deck_name.strip() or "Default"
         self.create_deck(clean_deck)
 
-        model_name, model_fields = self.resolve_note_model()
+        if model_name and model_name.strip():
+            chosen_model = model_name.strip()
+            model_fields = self.get_model_field_names(chosen_model)
+        else:
+            chosen_model, model_fields = self.resolve_note_model()
+
         mapped_fields = self.map_card_to_fields(card_data, model_fields)
 
         note_payload = {
             "deckName": clean_deck,
-            "modelName": model_name,
+            "modelName": chosen_model,
             "fields": mapped_fields,
             "options": {
                 "allowDuplicate": False,

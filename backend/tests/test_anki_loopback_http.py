@@ -110,6 +110,13 @@ def test_real_http_decks(mock_anki_server):
     assert "Japanese::Core" in decks
 
 
+def test_real_http_models(mock_anki_server):
+    service = AnkiConnectService(endpoint_url=mock_anki_server)
+    models = service.get_model_names()
+    assert "Basic" in models
+    assert "Japanese (mining)" in models
+
+
 def test_real_http_duplicate_detection(mock_anki_server):
     service = AnkiConnectService(endpoint_url=mock_anki_server)
     # 桜 is in notes

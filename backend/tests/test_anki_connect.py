@@ -187,6 +187,86 @@ class TestAnkiConnectService:
         assert fields["Example Sentence"] == "映画を見る"
         assert fields["Example Translation"] == "watch a movie"
 
+    def test_mapping_yomitan_default_template(self):
+        service = AnkiConnectService()
+        card_data = {
+            "expression": "約束",
+            "reading": "やくそく",
+            "meaning": "promise; agreement",
+            "example_sentence": "約束を守る",
+            "audio": "audio.mp3",
+        }
+        fields = service.map_card_to_fields(card_data, ["Expression", "Reading", "Glossary", "Sentence", "Audio"])
+        assert fields["Expression"] == "約束"
+        assert fields["Reading"] == "やくそく"
+        assert fields["Glossary"] == "promise; agreement"
+        assert fields["Sentence"] == "約束を守る"
+        assert fields["Audio"] == "audio.mp3"
+
+    def test_mapping_core_2k_template(self):
+        service = AnkiConnectService()
+        card_data = {
+            "expression": "桜",
+            "reading": "さくら",
+            "meaning": "cherry blossom",
+            "example_sentence": "桜が咲いた",
+            "example_translation": "The cherry blossoms bloomed",
+        }
+        fields = service.map_card_to_fields(card_data, ["Word", "Kana", "Meaning", "Sentence-Expression", "Sentence-English"])
+        assert fields["Word"] == "桜"
+        assert fields["Kana"] == "さくら"
+        assert fields["Meaning"] == "cherry blossom"
+        assert fields["Sentence-Expression"] == "桜が咲いた"
+        assert fields["Sentence-English"] == "The cherry blossoms bloomed"
+
+    def test_mapping_kaishi_template(self):
+        service = AnkiConnectService()
+        card_data = {
+            "expression": "猫",
+            "reading": "ねこ",
+            "meaning": "cat",
+            "example_sentence": "猫がいる",
+            "example_translation": "There is a cat",
+        }
+        fields = service.map_card_to_fields(card_data, ["Word", "Reading", "Meaning", "Example Sentence", "Example Sentence Meaning"])
+        assert fields["Word"] == "猫"
+        assert fields["Reading"] == "ねこ"
+        assert fields["Meaning"] == "cat"
+        assert fields["Example Sentence"] == "猫がいる"
+        assert fields["Example Sentence Meaning"] == "There is a cat"
+
+    def test_mapping_anime_mining_template(self):
+        service = AnkiConnectService()
+        card_data = {
+            "expression": "食べる",
+            "reading": "たべる",
+            "meaning": "to eat",
+            "example_sentence": "ご飯を食べる",
+            "audio": "taberu.mp3",
+            "image": "taberu.jpg",
+        }
+        fields = service.map_card_to_fields(
+            card_data,
+            ["VocabKanji", "VocabFurigana", "VocabDef", "Sentence", "SentenceAudio", "SentenceImage"]
+        )
+        assert fields["VocabKanji"] == "食べる"
+        assert fields["VocabFurigana"] == "たべる"
+        assert fields["VocabDef"] == "to eat"
+        assert fields["Sentence"] == "ご飯を食べる"
+        assert fields["SentenceAudio"] == "taberu.mp3"
+        assert fields["SentenceImage"] == "taberu.jpg"
+
+    def test_mapping_arbitrary_two_field_fallback(self):
+        service = AnkiConnectService()
+        card_data = {
+            "expression": "水",
+            "reading": "みず",
+            "meaning": "water",
+        }
+        fields = service.map_card_to_fields(card_data, ["Question", "Answer"])
+        assert fields["Question"] == "水"
+        assert fields["Answer"] == "water"
+
     def test_add_note_success(self):
         service = AnkiConnectService()
         with patch.object(service, "create_deck"), \
@@ -280,3 +360,53 @@ class TestAnkiConnectService:
         with patch.object(service, "_invoke", side_effect=mock_invoke):
             found_id = service.find_existing_note("Default", "本", "ほん")
             assert found_id is None
+
+    def test_add_note_with_explicit_model_uses_exact_model(self):
+        service = AnkiConnectService()
+        invoked_payloads = []
+
+        def mock_invoke(action, **params):
+            if action == "modelFieldNames":
+                return ["Expression", "Meaning"]
+            if action == "addNote":
+                invoked_payloads.append(params)
+                return 778899
+            return None
+
+        with patch.object(service, "create_deck"), \
+             patch.object(service, "resolve_note_model") as mock_resolve, \
+             patch.object(service, "_invoke", side_effect=mock_invoke):
+            note_id = service.add_note(
+                deck_name="Default",
+                card_data={"expression": "空", "meaning": "sky"},
+                model_name="Custom Vocab Model",
+            )
+            assert note_id == 778899
+            # resolve_note_model must NOT be called when explicit model is provided
+            mock_resolve.assert_not_called()
+            # The payload passed to addNote must use the explicit model
+            assert len(invoked_payloads) == 1
+            assert invoked_payloads[0]["note"]["modelName"] == "Custom Vocab Model"
+
+    def test_add_note_without_model_uses_automatic_resolution(self):
+        service = AnkiConnectService()
+        invoked_payloads = []
+
+        def mock_invoke(action, **params):
+            if action == "addNote":
+                invoked_payloads.append(params)
+                return 445566
+            return None
+
+        with patch.object(service, "create_deck"), \
+             patch.object(service, "resolve_note_model", return_value=("Resolved Model", ["Front", "Back"])) as mock_resolve, \
+             patch.object(service, "_invoke", side_effect=mock_invoke):
+            note_id = service.add_note(
+                deck_name="Default",
+                card_data={"expression": "月", "meaning": "moon"},
+                model_name=None,
+            )
+            assert note_id == 445566
+            mock_resolve.assert_called_once()
+            assert len(invoked_payloads) == 1
+            assert invoked_payloads[0]["note"]["modelName"] == "Resolved Model"

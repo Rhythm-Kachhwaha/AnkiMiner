@@ -155,6 +155,7 @@ class CardEditorTests(unittest.TestCase):
             "audio": "https://example.com/eiga.mp3",
             "tags": "n5, entertainment",
             "notes": "Learned from dynamic subtitles",
+            "model_name": "My Japanese Note",
         }
         res = self.client.post("/api/cards/save", json=payload)
         self.assertEqual(res.status_code, 200)
@@ -166,11 +167,13 @@ class CardEditorTests(unittest.TestCase):
         self.assertEqual(data["audio"], "https://example.com/eiga.mp3")
         self.assertEqual(data["tags"], "n5, entertainment")
         self.assertEqual(data["notes"], "Learned from dynamic subtitles")
+        self.assertEqual(data["model_name"], "My Japanese Note")
 
         repo = CardRepository(self.db_path)
         saved = repo.get_by_id(data["id"])
         self.assertEqual(saved.hint, "watch on big screen")
         self.assertEqual(saved.tags, "n5, entertainment")
+        self.assertEqual(saved.model_name, "My Japanese Note")
 
     # 6. Save creates exactly one SQLite row
     def test_6_save_creates_exactly_one_sqlite_row(self):

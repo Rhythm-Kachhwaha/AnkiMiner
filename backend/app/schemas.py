@@ -58,6 +58,7 @@ class CaptureResponse(BaseModel):
     entries: list[DictionaryEntry] = []
     dictionary_error: Optional[str] = None
     deck_name: str = "Default"
+    model_name: str = ""
     status: str = "draft"
     sync_status: str = "pending"
     anki_note_id: Optional[int] = None
@@ -74,6 +75,7 @@ class SaveCardRequest(BaseModel):
     reading: str = Field(default="", max_length=200)
     meaning: str = Field(default="", max_length=2000)
     deck_name: str = Field(default="Default", max_length=100)
+    model_name: str = Field(default="", max_length=100)
     hint: str = Field(default="", max_length=500)
     example_sentence: str = Field(default="", max_length=1000)
     example_translation: str = Field(default="", max_length=1000)
@@ -108,6 +110,7 @@ class SaveCardResponse(BaseModel):
     source_text: str = ""
     deinflected_text: str = ""
     deck_name: str = "Default"
+    model_name: str = ""
     status: str = "saved"
     sync_status: str = "pending"
     anki_note_id: Optional[int] = None
@@ -131,11 +134,17 @@ class AnkiDecksResponse(BaseModel):
     connected: bool = True
 
 
+class AnkiModelsResponse(BaseModel):
+    models: list[str] = ["Basic"]
+    connected: bool = True
+
+
 class SyncCardResponse(BaseModel):
     id: int
     sync_status: str
     anki_note_id: Optional[int] = None
     deck_name: str = "Default"
+    model_name: Optional[str] = None
     error: Optional[str] = None
     synced_at: Optional[str] = None
 

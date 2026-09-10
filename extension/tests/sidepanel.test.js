@@ -23,11 +23,17 @@ assert.ok(html.includes('id="field-font-select"'), "Japanese font selector must 
 assert.ok(html.includes('value="Noto Sans JP"'), "Noto Sans JP font option must exist");
 assert.ok(html.includes('Noto Sans Japanese'), "Noto Sans Japanese label must exist");
 
+// Phase 6 elements: Note Type selector
+assert.ok(html.includes('id="field-model-select"'), "Note Type selector select must exist");
+assert.ok(html.includes('id="field-model-name"'), "Hidden model name input must exist");
+assert.ok(html.includes('<option value="Basic">Basic</option>'), "Default Basic model option must exist");
+assert.ok(html.includes('class="form-group model-selector-group"'), "Model selector container group must exist");
+
 // Verify default state
 assert.ok(html.includes('<option value="Default">Default</option>'), "Default deck option must exist");
 assert.ok(html.includes('id="sync-anki-btn" class="btn-sync" disabled'), "Sync button should start disabled");
 
-console.log("sidepanel HTML tests passed (Phase 4 + Phase 5 DOM verified)");
+console.log("sidepanel HTML tests passed (Phase 4, 5 & 6 DOM verified)");
 
 // Verify updateSyncUI state machine
 const vm = require("node:vm");

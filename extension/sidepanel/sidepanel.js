@@ -2,6 +2,7 @@ const API_CAPTURE_URL = "http://127.0.0.1:8000/api/capture";
 const API_SAVE_URL = "http://127.0.0.1:8000/api/cards/save";
 const API_ANKI_STATUS_URL = "http://127.0.0.1:8000/api/anki/status";
 const API_ANKI_DECKS_URL = "http://127.0.0.1:8000/api/anki/decks";
+const API_ANKI_MODELS_URL = "http://127.0.0.1:8000/api/anki/models";
 const API_CARD_SYNC_URL = (id) => `http://127.0.0.1:8000/api/cards/${id}/sync`;
 
 const toggle = document.querySelector("#mining-toggle");
@@ -23,6 +24,8 @@ const cardEditor = document.querySelector("#card-editor");
 const fieldCardId = document.querySelector("#field-card-id");
 const fieldDeckName = document.querySelector("#field-deck-name");
 const fieldDeckSelect = document.querySelector("#field-deck-select");
+const fieldModelName = document.querySelector("#field-model-name");
+const fieldModelSelect = document.querySelector("#field-model-select");
 const fieldFontSelect = document.querySelector("#field-font-select");
 const fieldSourceText = document.querySelector("#field-source-text");
 const fieldDeinflectedText = document.querySelector("#field-deinflected-text");
@@ -159,6 +162,49 @@ async function loadDecks() {
   }
 }
 
+async function loadModels() {
+  try {
+    const res = await fetch(API_ANKI_MODELS_URL);
+    const data = await res.json().catch(() => ({}));
+    const models = Array.isArray(data.models) && data.models.length ? data.models : ["Basic"];
+
+    if (fieldModelSelect) {
+      const currentSelected = fieldModelSelect.value;
+      fieldModelSelect.replaceChildren();
+      models.forEach(model => {
+        const opt = document.createElement("option");
+        opt.value = model;
+        opt.textContent = model;
+        fieldModelSelect.append(opt);
+      });
+
+      // Restore last used / preferred note type if available
+      let preferredModel = "";
+      try {
+        if (typeof chrome !== "undefined" && chrome.storage?.local) {
+          const stored = await chrome.storage.local.get("preferred_anki_model");
+          preferredModel = stored?.preferred_anki_model;
+        } else if (typeof localStorage !== "undefined") {
+          preferredModel = localStorage.getItem("preferred_anki_model");
+        }
+      } catch (_) {}
+
+      const targetModel = currentSelected || preferredModel || models[0] || "Basic";
+      if (models.includes(targetModel)) {
+        fieldModelSelect.value = targetModel;
+      }
+      if (fieldModelName) fieldModelName.value = fieldModelSelect.value;
+    }
+  } catch (_) {
+    if (fieldModelSelect && !fieldModelSelect.options.length) {
+      const opt = document.createElement("option");
+      opt.value = "Basic";
+      opt.textContent = "Basic";
+      fieldModelSelect.append(opt);
+    }
+  }
+}
+
 // Japanese Font Selection handling
 function applyJapaneseFont(fontFamily) {
   let fontStack = "var(--font-noto-sans)";
@@ -211,6 +257,20 @@ if (fieldDeckSelect) {
         chrome.storage.local.set({last_used_deck: val});
       } else if (typeof localStorage !== "undefined") {
         localStorage.setItem("last_used_deck", val);
+      }
+    } catch (_) {}
+  });
+}
+
+if (fieldModelSelect) {
+  fieldModelSelect.addEventListener("change", () => {
+    const val = fieldModelSelect.value;
+    if (fieldModelName) fieldModelName.value = val;
+    try {
+      if (typeof chrome !== "undefined" && chrome.storage?.local) {
+        chrome.storage.local.set({preferred_anki_model: val});
+      } else if (typeof localStorage !== "undefined") {
+        localStorage.setItem("preferred_anki_model", val);
       }
     } catch (_) {}
   });
@@ -372,6 +432,17 @@ async function identify(text) {
         fieldDeckSelect.value = body.deck_name;
       }
       if (fieldDeckName) fieldDeckName.value = (fieldDeckSelect && fieldDeckSelect.value) || body.deck_name || "Default";
+      if (fieldModelSelect && body.model_name) {
+        let hasOption = Array.from(fieldModelSelect.options).some(o => o.value === body.model_name);
+        if (!hasOption) {
+          const opt = document.createElement("option");
+          opt.value = body.model_name;
+          opt.textContent = body.model_name;
+          fieldModelSelect.append(opt);
+        }
+        fieldModelSelect.value = body.model_name;
+      }
+      if (fieldModelName) fieldModelName.value = (fieldModelSelect && fieldModelSelect.value) || body.model_name || "";
       if (fieldSourceText) fieldSourceText.value = body.source_text || "";
       if (fieldDeinflectedText) fieldDeinflectedText.value = body.deinflected_text || "";
       if (fieldExpression) fieldExpression.value = body.expression || "";
@@ -445,12 +516,14 @@ if (cardEditor) {
     saveCardBtn.textContent = "Saving…";
 
     const targetDeck = (fieldDeckSelect && fieldDeckSelect.value.trim()) || (fieldDeckName && fieldDeckName.value.trim()) || "Default";
+    const targetModel = (fieldModelSelect && fieldModelSelect.value.trim()) || (fieldModelName && fieldModelName.value.trim()) || "";
     const payload = {
       id: fieldCardId && fieldCardId.value ? parseInt(fieldCardId.value, 10) : null,
       expression: expr,
       reading: fieldReading ? fieldReading.value.trim() : "",
       meaning: fieldMeaning ? fieldMeaning.value.trim() : "",
       deck_name: targetDeck,
+      model_name: targetModel,
       hint: fieldHint ? fieldHint.value.trim() : "",
       example_sentence: fieldExampleSentence ? fieldExampleSentence.value.trim() : "",
       example_translation: fieldExampleTranslation ? fieldExampleTranslation.value.trim() : "",
@@ -474,6 +547,10 @@ if (cardEditor) {
       }
 
       if (fieldCardId) fieldCardId.value = body.id || "";
+      if (body.model_name && fieldModelSelect) {
+        fieldModelSelect.value = body.model_name;
+        if (fieldModelName) fieldModelName.value = body.model_name;
+      }
       if (expression) expression.textContent = body.expression || expr;
       if (reading) reading.textContent = body.reading || "";
 
@@ -597,6 +674,7 @@ document.addEventListener("keydown", event => {
 // Initialization
 loadFontPreference().catch(() => {});
 loadDecks().catch(() => {});
+loadModels().catch(() => {});
 
 // Default Yomitan indicator to ready state
 setIndicatorStatus(indicatorYomitan, "connected", "Yomitan: Ready");

@@ -2,10 +2,9 @@
 
 ## Current status
 
-Phase 5 (SIDEBAR 2.0 + JAPANESE TYPOGRAPHY + UX POLISH) is fully implemented and verified (2026-09-10).
-All automated backend tests pass (65/65 pytest tests).
-Extension unit, DOM contract, and state machine tests pass (2/2 node tests, with Phase 5 DOM assertions added).
-Live headless Chrome CDP automation verifies real browser UI rendering, Japanese font selection, prominent word hero display, live editing sync, and dynamic term capture without page reload across test words (映画, 日, 日にち, 日本, 食べる, 見た).
+Phase 6 (ANKI NOTE-TYPE & FIELD MAPPING) is fully implemented and verified (2026-09-10).
+All automated backend tests pass (79/79 pytest tests).
+All extension unit, DOM contract, and state machine tests pass (2/2 node tests, including Phase 6 Note Type DOM contract assertions).
 
 ## Implemented
 
@@ -108,13 +107,90 @@ Live headless Chrome CDP automation verifies real browser UI rendering, Japanese
   - Keyboard shortcuts: `Ctrl/Cmd+Enter` submits/saves card, `Ctrl/Cmd+K` focuses expression, `Ctrl/Cmd+Shift+M` focuses meaning, `Esc` closes optional fields.
   - Responsive styling ensuring zero horizontal overflow down to 320px panel width.
 
+### Phase 6 — Slice 1 (Selected Note Type / Model Persistence)
+
+- **SQLite Schema & Migration (`app/db/connection.py`)**:
+  - Added `model_name TEXT NOT NULL DEFAULT ''` to `cards` table.
+  - Safe migration in `init_db()` adds `model_name` to existing databases without data loss or downtime.
+- **Card Repository (`app/repositories/card_repository.py`)**:
+  - `CardDraft` and `CardRecord` include `model_name: str = ""`.
+  - SELECT queries in `find_by_identity`, `get_by_id`, `get_pending_or_failed_cards` load `model_name`.
+  - `save_or_update` inserts and updates `model_name`.
+  - `get_sync_state` returns `model_name`.
+- **API Request/Response Schemas (`app/schemas.py`)**:
+  - Added `model_name: str = ""` to `CaptureResponse` and `SaveCardResponse`.
+  - Added `model_name: str = Field(default="", max_length=100)` to `SaveCardRequest`.
+  - Added `model_name: Optional[str] = None` to `SyncCardResponse`.
+- **AnkiConnect Service (`app/services/anki_connect.py`)**:
+  - `add_note` accepts optional `model_name: str | None = None`.
+  - When provided, uses `chosen_model` and `get_model_field_names(chosen_model)`.
+  - Preserves `resolve_note_model()` automatic resolution when `model_name` is absent or empty.
+- **Card Service (`app/services/card_service.py`)**:
+  - `save_card` persists and returns `model_name`.
+  - `sync_card` passes explicit `card.model_name` to `anki.add_note` if non-empty; passes `None` otherwise to trigger automatic model resolution.
+  - Duplicate check, error handling, and offline-safety behaviors remain intact.
+
+### Phase 6 — Slice 2 (Note-Type / Model Discovery Endpoint)
+
+- **API Schema (`app/schemas.py`)**:
+  - Added `AnkiModelsResponse(models: list[str] = ["Basic"], connected: bool = True)`.
+- **CardService Note-Type Discovery (`app/services/card_service.py`)**:
+  - Added `CardService.get_anki_models() -> AnkiModelsResponse`.
+  - Queries `AnkiConnectService.get_model_names()`. If Anki is connected, returns the real list of models.
+  - Graceful fallback: If Anki is offline or unreachable, returns `models=["Basic"]` with `connected=False` without raising a 500 error, preserving offline-first operation.
+- **FastAPI Route (`app/main.py`)**:
+  - Added `GET /api/anki/models` returning `AnkiModelsResponse`.
+
+### Phase 6 — Slice 3 (Side Panel Note-Type Selector)
+
+- **Side Panel HTML (`extension/sidepanel/sidepanel.html`)**:
+  - Added `<input type="hidden" id="field-model-name" name="model_name" value="">`.
+  - Added Note Type selector `<select id="field-model-select" name="model_select">` alongside Deck in `.form-row-compact`.
+  - Placed Font selector in its own row cleanly below Deck and Note Type, preventing horizontal overflow down to 320px.
+- **Side Panel Styling (`extension/sidepanel/sidepanel.css`)**:
+  - Added `.model-selector-group` with `flex: 1` and `min-width: 0` to `.form-row-compact` flex layout.
+- **Side Panel Logic & State (`extension/sidepanel/sidepanel.js`)**:
+  - Added `API_ANKI_MODELS_URL`.
+  - Implemented `loadModels()` querying `/api/anki/models`, dynamically populating `#field-model-select` options with graceful fallback to `["Basic"]` if offline.
+  - User preference persistence: stores and restores `preferred_anki_model` in `chrome.storage.local` / `localStorage`.
+  - Card Draft & Editor population: `identify()` sets `#field-model-select` and `#field-model-name` to `body.model_name` if present.
+  - Card Save form submission: includes `model_name` from selector in `SaveCardRequest` payload.
+  - Startup initialization: runs `loadModels()` on load.
+### Phase 6 — Slice 4 (Extended Field Mapping for Community Note Models)
+
+- **Deterministic Community Model Mapping (`app/services/anki_connect.py`)**:
+  - Enhanced `map_card_to_fields()` normalization: strips hyphens (`.replace("-", "")`) in addition to underscores and case-folding, allowing hyphenated template field names (e.g. `Sentence-English`, `Sentence-Audio`) to match aliases seamlessly.
+  - Added support for popular Japanese community note templates:
+    - Yomitan Default / AnkiConnect templates: `Expression`, `Reading`, `Glossary`, `Sentence`, `SentenceAudio`, `Picture`.
+    - Core 2k/6k / Nayr / Tango templates: `Target Word`, `Target Reading`, `English`, `Sentence (Target)`, `Sentence (English)`, `Sentence Audio`, `Word Audio`, `Image`.
+    - Kaishi 1.5k templates: `Word`, `Furigana`, `Primary Definition`, `Secondary Definition`, `Example Sentence`, `Example Sentence Reading`, `Example Sentence English`, `Audio`.
+    - Anime Cards / Mining templates: `Vocab`, `VocabKana`, `VocabDef`, `Sentence`, `SentenceTranslation`, `Picture`.
+  - Fallback support: Arbitrary two-field models (e.g. `Question`/`Answer`, `Item`/`Desc`) automatically receive expression in the first field and meaning in the second field, ensuring zero unmapped sync failures.
+
 ## Verified
 
-- **Automated backend test suite (65/65 passed)** — run 2026-09-10:
-  - All 65 tests in `backend/tests/` passed with 0 regressions.
+- **Automated backend test suite (79/79 passed)** — run 2026-09-10:
+  - All 79 tests in `backend/tests/` passed with 0 regressions.
+  - 14 new/updated tests covering Phase 6:
+    - `test_deterministic_basic_model_mapping`
+    - `test_deterministic_japanese_model_mapping`
+    - `test_mapping_yomitan_default_template`
+    - `test_mapping_core_2k_template`
+    - `test_mapping_kaishi_template`
+    - `test_mapping_anime_mining_template`
+    - `test_mapping_arbitrary_two_field_fallback`
+    - `test_add_note_with_explicit_model_uses_exact_model`
+    - `test_add_note_without_model_uses_automatic_resolution`
+    - `test_model_name_persistence_and_update`
+    - `test_sync_card_with_explicit_model_name_uses_that_model`
+    - `test_sync_card_without_model_name_uses_none_for_automatic_resolution`
+    - `test_card_service_get_anki_models_connected`
+    - `test_card_service_get_anki_models_offline_fallback`
+    - `test_phase6_end_to_end_note_model_workflow`
+    - `test_real_http_models` in loopback tests
 - **Automated extension unit & contract tests (2/2 passed)** — run 2026-09-10:
   - `capture-utils.test.js`: boundary and script tests pass.
-  - `sidepanel.test.js`: deck selector, sync button, sync status, font selector, connection indicators, and hero display DOM contracts pass; `updateSyncUI` state machine transitions verified (`ready`, `pending`, `syncing`, `synced`, `failed`).
+  - `sidepanel.test.js`: deck selector, note type selector (`#field-model-select`, `#field-model-name`), sync button, sync status, font selector, connection indicators, and hero display DOM contracts pass; `updateSyncUI` state machine transitions verified (`ready`, `pending`, `syncing`, `synced`, `failed`).
 - **Live Chromium / Chrome CDP End-to-End Browser Automation**:
   - Header indicators verified: `ANKIMINER`, `indicator-yomitan` (`connected`), `indicator-anki` (`checking` / `connected`).
   - Mining toggle verified: toggles between `Start mining` and `Stop mining`, updates mode text.
@@ -144,11 +220,11 @@ Live headless Chrome CDP automation verifies real browser UI rendering, Japanese
 
 ## Known issues
 
-- None. Phase 5 is complete and fully verified.
+- None. Phase 6 is complete and fully verified.
 
 ## Next task
 
-Phase 5 complete and verified. Await user instructions for Phase 6.
+Phase 6 complete and verified. Ready for next project milestones or deployment.
 
 
 
