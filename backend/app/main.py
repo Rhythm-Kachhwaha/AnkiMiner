@@ -10,6 +10,9 @@ from app.schemas import (
     AnkiStatusResponse,
     CaptureRequest,
     CaptureResponse,
+    CardDetailResponse,
+    CardListResponse,
+    DeleteCardResponse,
     SaveCardRequest,
     SaveCardResponse,
     SyncCardResponse,
@@ -76,5 +79,44 @@ def sync_card(card_id: int) -> SyncCardResponse:
         return service.sync_card(card_id)
     except ValueError as error:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+
+
+@app.get("/api/cards", response_model=CardListResponse)
+def list_cards(
+    search: str | None = None,
+    deck: str | None = None,
+    deck_name: str | None = None,
+    sync_status: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> CardListResponse:
+    service = CardService()
+    target_deck = deck or deck_name
+    return service.list_cards(
+        search=search,
+        deck_name=target_deck,
+        sync_status=sync_status,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@app.get("/api/cards/{card_id}", response_model=CardDetailResponse)
+def get_card(card_id: int) -> CardDetailResponse:
+    service = CardService()
+    card = service.get_card(card_id)
+    if not card:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Card with ID {card_id} does not exist.")
+    return card
+
+
+@app.delete("/api/cards/{card_id}", response_model=DeleteCardResponse)
+def delete_card(card_id: int) -> DeleteCardResponse:
+    service = CardService()
+    deleted = service.delete_card(card_id)
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Card with ID {card_id} does not exist.")
+    return DeleteCardResponse(id=card_id, deleted=True)
+
 
 

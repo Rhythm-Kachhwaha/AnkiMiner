@@ -155,6 +155,44 @@
         </div>
       </form>
     </section>
+
+    <!-- Mining History & Card Library -->
+    <section id="history-section" class="history-section" aria-label="Mining History & Card Library">
+      <div class="section-header history-header">
+        <span class="section-title">HISTORY</span>
+        <span id="history-count" class="history-count">0 cards</span>
+      </div>
+
+      <div class="history-toolbar">
+        <div class="history-search-group">
+          <input
+            type="search"
+            id="history-search-input"
+            class="history-search-input"
+            placeholder="Search cards…"
+            autocomplete="off"
+            aria-label="Search cards"
+          >
+        </div>
+        <div class="history-filter-row">
+          <select id="history-deck-filter" class="history-filter-select" aria-label="Filter by deck">
+            <option value="all">All decks</option>
+          </select>
+          <select id="history-sync-filter" class="history-filter-select" aria-label="Filter by sync status">
+            <option value="all">All statuses</option>
+            <option value="pending">Pending</option>
+            <option value="syncing">Syncing</option>
+            <option value="synced">Synced</option>
+            <option value="failed">Failed</option>
+          </select>
+        </div>
+      </div>
+
+      <div id="history-list-container" class="history-list-container" role="region" aria-label="Saved cards list">
+        <div id="history-empty" class="history-empty" hidden>No saved cards.</div>
+        <div id="history-cards-list" class="history-cards-list"></div>
+      </div>
+    </section>
   </main>
   <script src="sidepanel.js"></script>
 </body>

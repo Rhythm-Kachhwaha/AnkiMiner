@@ -163,6 +163,99 @@ class CardRepositoryTests(unittest.TestCase):
         refetched = self.repo.get_by_id(card.id)
         self.assertEqual(refetched.model_name, "Basic (and reversed card)")
 
+    def test_9_list_cards_and_pagination(self):
+        for i in range(5):
+            self.repo.save(CardDraft(expression=f"単語{i}", reading=f"たんご{i}", meaning=f"word {i}"))
+        self.assertEqual(self.repo.count(), 5)
+        self.assertEqual(self.repo.count_cards(), 5)
+
+        # list with limit
+        first_page = self.repo.list_cards(limit=3, offset=0)
+        self.assertEqual(len(first_page), 3)
+        self.assertEqual(first_page[0].expression, "単語4")  # newest first
+        self.assertEqual(first_page[1].expression, "単語3")
+
+        second_page = self.repo.list_cards(limit=3, offset=3)
+        self.assertEqual(len(second_page), 2)
+        self.assertEqual(second_page[0].expression, "単語1")
+        self.assertEqual(second_page[1].expression, "単語0")
+
+    def test_10_list_cards_search(self):
+        self.repo.save(CardDraft(expression="映画", reading="えいが", meaning="movie, cinema"))
+        self.repo.save(CardDraft(expression="日本", reading="にほん", meaning="Japan", notes="important place"))
+        self.repo.save(CardDraft(expression="食べる", reading="たべる", meaning="to eat", example_sentence="リンゴを食べる"))
+
+        # Search expression
+        matches_expr = self.repo.list_cards(search="映画")
+        self.assertEqual(len(matches_expr), 1)
+        self.assertEqual(matches_expr[0].expression, "映画")
+
+        # Search reading
+        matches_read = self.repo.list_cards(search="にほん")
+        self.assertEqual(len(matches_read), 1)
+        self.assertEqual(matches_read[0].expression, "日本")
+
+        # Search meaning
+        matches_meaning = self.repo.list_cards(search="movie")
+        self.assertEqual(len(matches_meaning), 1)
+        self.assertEqual(matches_meaning[0].expression, "映画")
+
+        # Search notes
+        matches_notes = self.repo.list_cards(search="place")
+        self.assertEqual(len(matches_notes), 1)
+        self.assertEqual(matches_notes[0].expression, "日本")
+
+        # Search example sentence
+        matches_eg = self.repo.list_cards(search="リンゴ")
+        self.assertEqual(len(matches_eg), 1)
+        self.assertEqual(matches_eg[0].expression, "食べる")
+
+        # Search no match
+        no_matches = self.repo.list_cards(search="nonexistent")
+        self.assertEqual(len(no_matches), 0)
+        self.assertEqual(self.repo.count_cards(search="nonexistent"), 0)
+
+    def test_11_list_cards_filter_deck_and_sync_status(self):
+        c1, _ = self.repo.save(CardDraft(expression="本", reading="ほん", deck_name="DeckA"))
+        c2, _ = self.repo.save(CardDraft(expression="車", reading="くるま", deck_name="DeckB"))
+        self.repo.mark_synced(c1.id, anki_note_id=123)
+
+        # Filter by deck
+        deck_a = self.repo.list_cards(deck_name="DeckA")
+        self.assertEqual(len(deck_a), 1)
+        self.assertEqual(deck_a[0].expression, "本")
+
+        # Filter by sync_status
+        synced = self.repo.list_cards(sync_status="synced")
+        self.assertEqual(len(synced), 1)
+        self.assertEqual(synced[0].expression, "本")
+
+        pending = self.repo.list_cards(sync_status="pending")
+        self.assertEqual(len(pending), 1)
+        self.assertEqual(pending[0].expression, "車")
+
+        # Filter with 'all'
+        all_cards = self.repo.list_cards(deck_name="all", sync_status="all")
+        self.assertEqual(len(all_cards), 2)
+
+    def test_12_get_saved_decks(self):
+        self.repo.save(CardDraft(expression="A", reading="a", deck_name="Mining Deck"))
+        self.repo.save(CardDraft(expression="B", reading="b", deck_name="Grammar Deck"))
+        decks = self.repo.get_saved_decks()
+        self.assertIn("Mining Deck", decks)
+        self.assertIn("Grammar Deck", decks)
+
+    def test_13_delete_card(self):
+        c, _ = self.repo.save(CardDraft(expression="消す", reading="けす", meaning="to erase"))
+        self.assertEqual(self.repo.count(), 1)
+        deleted = self.repo.delete(c.id)
+        self.assertTrue(deleted)
+        self.assertEqual(self.repo.count(), 0)
+        self.assertIsNone(self.repo.get_by_id(c.id))
+
+        # Delete non-existent ID
+        self.assertFalse(self.repo.delete(99999))
+
 
 if __name__ == "__main__":
     unittest.main()

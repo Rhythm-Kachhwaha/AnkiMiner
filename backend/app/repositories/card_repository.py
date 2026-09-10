@@ -417,3 +417,98 @@ class CardRepository:
             "deck_name": card.deck_name,
             "model_name": card.model_name,
         }
+
+    def list_cards(
+        self,
+        search: str | None = None,
+        deck_name: str | None = None,
+        sync_status: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[CardRecord]:
+        """
+        List cards with optional search query and filters.
+        Results are ordered by id DESC (newest cards first).
+        """
+        query = """
+            SELECT id, expression, reading, meaning, hint, example_sentence, example_translation,
+                   image, audio, tags, notes, source_text, deinflected_text, deck_name, model_name,
+                   normalized_expression, normalized_reading, normalized_deck_name,
+                   meanings_json, examples_json, status, created_at, updated_at,
+                   sync_status, anki_note_id, sync_error, synced_at
+            FROM cards
+        """
+        conditions = []
+        params: list[Any] = []
+
+        if search and search.strip():
+            term = f"%{search.strip()}%"
+            conditions.append(
+                "(expression LIKE ? OR reading LIKE ? OR meaning LIKE ? OR example_sentence LIKE ? OR notes LIKE ? OR tags LIKE ?)"
+            )
+            params.extend([term, term, term, term, term, term])
+
+        if deck_name and deck_name.strip() and deck_name.strip().lower() != "all":
+            conditions.append("deck_name = ?")
+            params.append(deck_name.strip())
+
+        if sync_status and sync_status.strip() and sync_status.strip().lower() != "all":
+            conditions.append("sync_status = ?")
+            params.append(sync_status.strip().lower())
+
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+
+        query += " ORDER BY id DESC LIMIT ? OFFSET ?"
+        params.extend([max(1, limit), max(0, offset)])
+
+        with db_session(self._db_path) as conn:
+            rows = conn.execute(query, params).fetchall()
+            return [_row_to_record(row) for row in rows]
+
+    def count_cards(
+        self,
+        search: str | None = None,
+        deck_name: str | None = None,
+        sync_status: str | None = None,
+    ) -> int:
+        """Count cards matching optional search query and filters."""
+        query = "SELECT COUNT(*) AS total FROM cards"
+        conditions = []
+        params: list[Any] = []
+
+        if search and search.strip():
+            term = f"%{search.strip()}%"
+            conditions.append(
+                "(expression LIKE ? OR reading LIKE ? OR meaning LIKE ? OR example_sentence LIKE ? OR notes LIKE ? OR tags LIKE ?)"
+            )
+            params.extend([term, term, term, term, term, term])
+
+        if deck_name and deck_name.strip() and deck_name.strip().lower() != "all":
+            conditions.append("deck_name = ?")
+            params.append(deck_name.strip())
+
+        if sync_status and sync_status.strip() and sync_status.strip().lower() != "all":
+            conditions.append("sync_status = ?")
+            params.append(sync_status.strip().lower())
+
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+
+        with db_session(self._db_path) as conn:
+            row = conn.execute(query, params).fetchone()
+            return int(row["total"]) if row else 0
+
+    def get_saved_decks(self) -> list[str]:
+        """Retrieve unique deck names from saved cards."""
+        with db_session(self._db_path) as conn:
+            rows = conn.execute("SELECT DISTINCT deck_name FROM cards ORDER BY deck_name ASC").fetchall()
+            return [row["deck_name"] for row in rows if row["deck_name"]]
+
+    def delete(self, card_id: int) -> bool:
+        """Delete a card row from SQLite by id. Returns True if deleted, False if not found."""
+        with db_session(self._db_path) as conn:
+            cursor = conn.execute("DELETE FROM cards WHERE id = ?", (card_id,))
+            conn.commit()
+            return cursor.rowcount > 0
+

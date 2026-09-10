@@ -2,9 +2,10 @@
 
 ## Current status
 
-Phase 6 (ANKI NOTE-TYPE & FIELD MAPPING) is fully implemented and verified (2026-09-10).
-All automated backend tests pass (79/79 pytest tests).
-All extension unit, DOM contract, and state machine tests pass (2/2 node tests, including Phase 6 Note Type DOM contract assertions).
+Phase 7 (MINING HISTORY & CARD LIBRARY) is fully implemented and verified (2026-09-10).
+All automated backend tests pass (92/92 pytest tests).
+All extension unit, DOM contract, state machine, and library helper tests pass (2/2 node test suites).
+Live AnkiConnect and live Yomitan verification passed with clean test cleanup.
 
 ## Implemented
 
@@ -167,47 +168,72 @@ All extension unit, DOM contract, and state machine tests pass (2/2 node tests, 
     - Anime Cards / Mining templates: `Vocab`, `VocabKana`, `VocabDef`, `Sentence`, `SentenceTranslation`, `Picture`.
   - Fallback support: Arbitrary two-field models (e.g. `Question`/`Answer`, `Item`/`Desc`) automatically receive expression in the first field and meaning in the second field, ensuring zero unmapped sync failures.
 
+### Phase 7 (Mining History & Card Library)
+
+- **SQLite Local Data Access & Repository (`app/repositories/card_repository.py`)**:
+  - `CardRepository.list_cards()`: Queries saved cards from SQLite with optional case-insensitive search (`LIKE` across expression, reading, meaning, example_sentence, notes, tags), deck filtering (`deck_name = ?`), sync status filtering (`sync_status = ?`), and pagination (`LIMIT ? OFFSET ?`), strictly ordered `id DESC` (newest mined cards first).
+  - `CardRepository.count_cards()`: Returns accurate count matching active search and filter constraints.
+  - `CardRepository.get_saved_decks()`: Returns distinct deck names from saved cards.
+  - `CardRepository.delete()`: Safely deletes a card row from SQLite by ID without touching external Anki notes.
+- **Card Library Schemas (`app/schemas.py`)**:
+  - Added `CardSummary`: provider-neutral summary containing `id`, `expression`, `reading`, `meaning`, `deck_name`, `model_name`, `sync_status`, `anki_note_id`, `sync_error`, `created_at`, `updated_at`.
+  - Added `CardListResponse`: contains `cards: list[CardSummary]`, `total: int`, `limit: int`, `offset: int`.
+  - Added `CardDetailResponse`: full card record containing all core and optional fields plus dictionary entries for editing.
+  - Added `DeleteCardResponse`: contains `id: int`, `deleted: bool`.
+- **Card Service Integration (`app/services/card_service.py`)**:
+  - `CardService.list_cards()`: Orchestrates card list retrieval and total count calculation.
+  - `CardService.get_card()`: Retrieves full card details for loading into the Card Editor.
+  - `CardService.delete_card()`: Deletes card from SQLite.
+  - `CardService.get_saved_decks()`: Retrieves distinct decks.
+- **Card API Routes (`app/main.py`)**:
+  - `GET /api/cards`: Lists saved cards with query parameters `search`, `deck` / `deck_name`, `sync_status`, `limit`, `offset`.
+  - `GET /api/cards/{card_id}`: Retrieves single card details by ID (returns 404 if not found).
+  - `DELETE /api/cards/{card_id}`: Deletes a card from local SQLite (returns 404 if not found).
+- **Side Panel Library UI (`extension/sidepanel/sidepanel.html`, `sidepanel.css`, `sidepanel.js`)**:
+  - Added `#history-section` in Side Panel with `#history-count` showing total saved cards.
+  - Search toolbar: debounced search input `#history-search-input` (250ms debounce) supporting expressions, kana readings, English meanings, notes, tags, and sentences.
+  - Deck filter: `#history-deck-filter` dynamically populated from user's saved card decks and Anki decks.
+  - Sync status filter: `#history-sync-filter` filtering by `all`, `pending`, `syncing`, `synced`, `failed`.
+  - Card rows (`.history-item`): compact display of expression (`--japanese-font`), reading, meaning, deck pill, sync badge (`.sync-pending`, `.sync-syncing`, `.sync-synced`, `.sync-failed`), retry button for failed syncs, and delete button (`×`).
+  - Open saved card: clicking a library card loads all card fields into the existing `#card-editor`, updates the prominent word hero, sync status UI, and selects the row.
+  - Re-save existing card: editing and saving an opened card updates the same SQLite row in-place without generating duplicates.
+  - Local deletion with confirmation: prompt confirms destructive action (`window.confirm`), removes row from SQLite and library UI, and resets the editor if the deleted card was open.
+  - Sync retry from library: retry button triggers AnkiConnect sync directly from the card row, updating sync badges across the UI.
+  - Usable at narrow widths down to 320px with zero horizontal overflow, matching `DESIGN.md` developer-utility aesthetics.
+
 ## Verified
 
-- **Automated backend test suite (79/79 passed)** — run 2026-09-10:
-  - All 79 tests in `backend/tests/` passed with 0 regressions.
-  - 14 new/updated tests covering Phase 6:
-    - `test_deterministic_basic_model_mapping`
-    - `test_deterministic_japanese_model_mapping`
-    - `test_mapping_yomitan_default_template`
-    - `test_mapping_core_2k_template`
-    - `test_mapping_kaishi_template`
-    - `test_mapping_anime_mining_template`
-    - `test_mapping_arbitrary_two_field_fallback`
-    - `test_add_note_with_explicit_model_uses_exact_model`
-    - `test_add_note_without_model_uses_automatic_resolution`
-    - `test_model_name_persistence_and_update`
-    - `test_sync_card_with_explicit_model_name_uses_that_model`
-    - `test_sync_card_without_model_name_uses_none_for_automatic_resolution`
-    - `test_card_service_get_anki_models_connected`
-    - `test_card_service_get_anki_models_offline_fallback`
-    - `test_phase6_end_to_end_note_model_workflow`
-    - `test_real_http_models` in loopback tests
+- **Automated backend test suite (92/92 passed)** — run 2026-09-10:
+  - All 92 tests in `backend/tests/` passed with 0 regressions.
+  - 13 new tests covering Phase 7:
+    - `test_card_repository.py`:
+      - `test_9_list_cards_and_pagination`
+      - `test_10_list_cards_search`
+      - `test_11_list_cards_filter_deck_and_sync_status`
+      - `test_12_get_saved_decks`
+      - `test_13_delete_card`
+    - `test_cards_api.py`:
+      - `test_list_cards_empty`
+      - `test_list_cards_populated_and_ordered_newest_first`
+      - `test_list_cards_pagination`
+      - `test_list_cards_search`
+      - `test_list_cards_filters`
+      - `test_get_card_by_id_success_and_not_found`
+      - `test_delete_card_success_and_not_found`
+    - `test_phase7_workflow.py`:
+      - `test_complete_phase7_mining_history_and_card_library_flow`
 - **Automated extension unit & contract tests (2/2 passed)** — run 2026-09-10:
   - `capture-utils.test.js`: boundary and script tests pass.
-  - `sidepanel.test.js`: deck selector, note type selector (`#field-model-select`, `#field-model-name`), sync button, sync status, font selector, connection indicators, and hero display DOM contracts pass; `updateSyncUI` state machine transitions verified (`ready`, `pending`, `syncing`, `synced`, `failed`).
-- **Live Chromium / Chrome CDP End-to-End Browser Automation**:
-  - Header indicators verified: `ANKIMINER`, `indicator-yomitan` (`connected`), `indicator-anki` (`checking` / `connected`).
-  - Mining toggle verified: toggles between `Start mining` and `Stop mining`, updates mode text.
-  - Captured Japanese word hero verified with `映画`: large expression `映画` (32px), reading `えいが` (15px).
-  - Jitendex dictionary verified: dictionary card with glosses (`movie`, `film`, `motion picture`) and styled example card (`その映画をもう一度見たいな。` / `I want to see the movie again.`).
-  - Font selection verified: changed to `Noto Serif JP` (`--japanese-font: var(--font-noto-serif)`), verified immediate CSS variable update and screenshot capture; switched back to `Noto Sans JP`.
-  - Raw expression integrity verified: remained exact string `映画` with zero HTML injection.
-  - Live hero syncing verified: typing `映画 (Edited)` into input immediately updated the hero expression.
-  - Meaning edit & optional fields toggle verified: edited meaning text, expanded optional fields (`aria-expanded="true"`).
-  - Save Card verified: saved card updated `#save-badge` to `[SAVED]`.
-  - Dynamic capture without page reload verified across 5 consecutive Japanese terms:
-    - `日` -> hero: `日`, reading: `ひ`, meaning: `day, sun, sunshine`
-    - `日にち` -> hero: `日にち`, reading: `ひにち`, meaning: `date / schedule`
-    - `日本` -> hero: `日本`, reading: `にほん`, meaning: `Japan`
-    - `食べる` -> hero: `食べる`, reading: `たべる`, meaning: `to eat`
-    - `見た` -> hero: `見る`, reading: `みた` (deinflected)
-  - Visual artifacts captured and confirmed: `01_initial_sidepanel.png`, `02_captured_eiga.png`, `03_font_serif.png`, `04_optional_fields_expanded.png`, `05_dynamic_capture_last_word.png`.
+  - `sidepanel.test.js`: deck selector, note type selector, sync button, sync status, font selector, connection indicators, hero display DOM contracts pass; `updateSyncUI` state machine transitions verified; Phase 7 History DOM elements (`#history-section`, `#history-count`, `#history-search-input`, `#history-deck-filter`, `#history-sync-filter`, `#history-list-container`, `#history-empty`, `#history-cards-list`), `updateDeckFilterOptions`, and `renderHistoryCards` verified with selection and retry button assertions.
+- **Live AnkiConnect Verification**:
+  - Connected to live AnkiConnect instance (`127.0.0.1:8765`, version 6).
+  - Saved test card with deck and model into SQLite, verified it appeared in library list.
+  - Synced to Anki, note created (`1789060490833`), sync_status transitioned to `synced`.
+  - Reopened card from library: model, deck, sync_status, and anki_note_id preserved.
+  - Duplicate check verified: re-syncing linked the existing note without duplicate creation.
+  - Cleaned up test note `1789060490833` from Anki (`{'result': None, 'error': None}`).
+- **Live Yomitan Verification**:
+  - Verified live Yomitan server on `127.0.0.1:19633`: identified `映画` (`えいが`) and enriched with Jitendex dictionary entries.
 
 ## Bugs fixed during verification
 
@@ -220,11 +246,12 @@ All extension unit, DOM contract, and state machine tests pass (2/2 node tests, 
 
 ## Known issues
 
-- None. Phase 6 is complete and fully verified.
+- None. Phase 7 is complete and fully verified.
 
 ## Next task
 
-Phase 6 complete and verified. Ready for next project milestones or deployment.
+Phase 7 complete and verified. Ready for next project milestones or deployment.
+
 
 
 

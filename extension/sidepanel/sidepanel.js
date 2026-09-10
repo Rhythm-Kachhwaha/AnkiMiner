@@ -4,6 +4,8 @@ const API_ANKI_STATUS_URL = "http://127.0.0.1:8000/api/anki/status";
 const API_ANKI_DECKS_URL = "http://127.0.0.1:8000/api/anki/decks";
 const API_ANKI_MODELS_URL = "http://127.0.0.1:8000/api/anki/models";
 const API_CARD_SYNC_URL = (id) => `http://127.0.0.1:8000/api/cards/${id}/sync`;
+const API_CARDS_URL = "http://127.0.0.1:8000/api/cards";
+const API_CARD_DETAIL_URL = (id) => `http://127.0.0.1:8000/api/cards/${id}`;
 
 const toggle = document.querySelector("#mining-toggle");
 const mode = document.querySelector("#mode");
@@ -44,6 +46,19 @@ const fieldNotes = document.querySelector("#field-notes");
 const saveCardBtn = document.querySelector("#save-card-btn");
 const syncAnkiBtn = document.querySelector("#sync-anki-btn");
 const ankiSyncStatus = document.querySelector("#anki-sync-status");
+
+// History & Card Library elements
+const historySection = document.querySelector("#history-section");
+const historyCount = document.querySelector("#history-count");
+const historySearchInput = document.querySelector("#history-search-input");
+const historyDeckFilter = document.querySelector("#history-deck-filter");
+const historySyncFilter = document.querySelector("#history-sync-filter");
+const historyListContainer = document.querySelector("#history-list-container");
+const historyEmpty = document.querySelector("#history-empty");
+const historyCardsList = document.querySelector("#history-cards-list");
+
+let selectedHistoryCardId = null;
+let searchDebounceTimeout = null;
 
 let miningMode = false;
 let currentCaptureId = 0;
@@ -577,6 +592,8 @@ if (cardEditor) {
           }
         }
       }
+      selectedHistoryCardId = body.id || null;
+      loadHistory().catch(() => {});
     } catch (error) {
       setStatus(`Save failed: ${formatErrorMessage(error)}`, true);
     } finally {
@@ -604,15 +621,18 @@ async function triggerAnkiSync() {
       const errMsg = body.error || body.detail || "Sync failed";
       updateSyncUI("failed", errMsg);
       setStatus(`Anki sync failed: ${errMsg}`, true);
+      loadHistory().catch(() => {});
       return;
     }
 
     updateSyncUI("synced");
     setStatus("Card sent to Anki.");
+    loadHistory().catch(() => {});
   } catch (error) {
     const msg = formatErrorMessage(error);
     updateSyncUI("failed", msg);
     setStatus(`Anki sync failed: ${msg}`, true);
+    loadHistory().catch(() => {});
   }
 }
 
@@ -671,10 +691,352 @@ document.addEventListener("keydown", event => {
   }
 });
 
+// Mining History & Card Library logic
+async function loadHistory() {
+  if (!historyCardsList) return;
+  try {
+    const search = historySearchInput ? historySearchInput.value.trim() : "";
+    const deck = historyDeckFilter ? historyDeckFilter.value : "all";
+    const syncStatus = historySyncFilter ? historySyncFilter.value : "all";
+
+    const params = new URLSearchParams({ limit: "50", offset: "0" });
+    if (search) params.set("search", search);
+    if (deck && deck !== "all") params.set("deck", deck);
+    if (syncStatus && syncStatus !== "all") params.set("sync_status", syncStatus);
+
+    const res = await fetch(`${API_CARDS_URL}?${params.toString()}`);
+    if (!res.ok) throw new Error("Failed to load history");
+    const data = await res.json();
+    const cards = Array.isArray(data.cards) ? data.cards : [];
+    const total = typeof data.total === "number" ? data.total : cards.length;
+
+    if (historyCount) {
+      historyCount.textContent = `${total} card${total === 1 ? "" : "s"}`;
+    }
+
+    if (cards.length === 0) {
+      historyCardsList.replaceChildren();
+      if (historyEmpty) {
+        historyEmpty.hidden = false;
+        historyEmpty.textContent = search || deck !== "all" || syncStatus !== "all" ? "No matching cards found." : "No saved cards yet.";
+      }
+    } else {
+      if (historyEmpty) historyEmpty.hidden = true;
+      renderHistoryCards(cards);
+    }
+
+    updateDeckFilterOptions(cards);
+  } catch (err) {
+    if (historyEmpty) {
+      historyEmpty.hidden = false;
+      historyEmpty.textContent = "Failed to load history.";
+    }
+  }
+}
+
+function updateDeckFilterOptions(cards) {
+  if (!historyDeckFilter) return;
+  const currentVal = historyDeckFilter.value;
+  const existingOptions = new Set(Array.from(historyDeckFilter.options).map(o => o.value));
+
+  cards.forEach(c => {
+    if (c.deck_name && !existingOptions.has(c.deck_name)) {
+      const opt = document.createElement("option");
+      opt.value = c.deck_name;
+      opt.textContent = c.deck_name;
+      historyDeckFilter.append(opt);
+      existingOptions.add(c.deck_name);
+    }
+  });
+
+  if (fieldDeckSelect) {
+    Array.from(fieldDeckSelect.options).forEach(opt => {
+      if (opt.value && !existingOptions.has(opt.value)) {
+        const newOpt = document.createElement("option");
+        newOpt.value = opt.value;
+        newOpt.textContent = opt.value;
+        historyDeckFilter.append(newOpt);
+        existingOptions.add(opt.value);
+      }
+    });
+  }
+
+  if (existingOptions.has(currentVal)) {
+    historyDeckFilter.value = currentVal;
+  }
+}
+
+function renderHistoryCards(cards) {
+  if (!historyCardsList) return;
+  historyCardsList.replaceChildren();
+
+  cards.forEach(card => {
+    const item = document.createElement("article");
+    item.className = "history-item" + (selectedHistoryCardId === card.id ? " selected" : "");
+    item.dataset.cardId = String(card.id);
+    item.tabIndex = 0;
+    item.setAttribute("role", "button");
+    item.setAttribute("aria-label", `Card ${card.expression}: ${card.reading || ""}`);
+
+    const main = document.createElement("div");
+    main.className = "history-item-main";
+
+    const head = document.createElement("div");
+    head.className = "history-item-head";
+
+    const expr = document.createElement("span");
+    expr.className = "history-item-expression";
+    expr.textContent = card.expression;
+    head.append(expr);
+
+    if (card.reading) {
+      const read = document.createElement("span");
+      read.className = "history-item-reading";
+      read.textContent = card.reading;
+      head.append(read);
+    }
+    main.append(head);
+
+    if (card.meaning) {
+      const mean = document.createElement("p");
+      mean.className = "history-item-meaning";
+      mean.textContent = card.meaning;
+      main.append(mean);
+    }
+
+    const meta = document.createElement("div");
+    meta.className = "history-item-meta";
+
+    const deckBadge = document.createElement("span");
+    deckBadge.className = "history-item-deck";
+    deckBadge.textContent = card.deck_name || "Default";
+    deckBadge.title = `Deck: ${card.deck_name || "Default"}`;
+    meta.append(deckBadge);
+
+    const syncBadge = document.createElement("span");
+    const statusKey = card.sync_status || "pending";
+    syncBadge.className = `history-badge sync-${statusKey}`;
+    syncBadge.textContent = statusKey.charAt(0).toUpperCase() + statusKey.slice(1);
+    meta.append(syncBadge);
+
+    main.append(meta);
+    item.append(main);
+
+    const actions = document.createElement("div");
+    actions.className = "history-item-actions";
+
+    if (card.sync_status === "failed") {
+      const retryBtn = document.createElement("button");
+      retryBtn.type = "button";
+      retryBtn.className = "btn-history-retry";
+      retryBtn.textContent = "Retry";
+      retryBtn.title = `Retry Anki sync: ${card.sync_error || "Error"}`;
+      retryBtn.setAttribute("aria-label", `Retry syncing ${card.expression} to Anki`);
+      retryBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        retrySyncFromHistory(card.id);
+      });
+      actions.append(retryBtn);
+    }
+
+    const delBtn = document.createElement("button");
+    delBtn.type = "button";
+    delBtn.className = "btn-history-delete";
+    delBtn.innerHTML = "&times;";
+    delBtn.title = "Delete local card";
+    delBtn.setAttribute("aria-label", `Delete ${card.expression} from local database`);
+    delBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      deleteLocalCard(card.id, card.expression);
+    });
+    actions.append(delBtn);
+
+    item.append(actions);
+
+    const openCard = () => openSavedCard(card.id);
+    item.addEventListener("click", (e) => {
+      if (e.target.closest(".history-item-actions")) return;
+      openCard();
+    });
+    item.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        openCard();
+      }
+    });
+
+    historyCardsList.append(item);
+  });
+}
+
+async function openSavedCard(cardId) {
+  try {
+    selectedHistoryCardId = cardId;
+    if (historyCardsList) {
+      historyCardsList.querySelectorAll(".history-item").forEach(el => {
+        el.classList.toggle("selected", el.dataset.cardId === String(cardId));
+      });
+    }
+
+    const res = await fetch(API_CARD_DETAIL_URL(cardId));
+    if (!res.ok) throw new Error("Could not retrieve card details.");
+    const body = await res.json();
+
+    if (cardEditor) {
+      cardEditor.hidden = false;
+      if (fieldCardId) fieldCardId.value = body.id || "";
+      if (fieldExpression) fieldExpression.value = body.expression || "";
+      if (fieldReading) fieldReading.value = body.reading || "";
+      if (fieldMeaning) fieldMeaning.value = body.meaning || "";
+      if (fieldHint) fieldHint.value = body.hint || "";
+      if (fieldExampleSentence) fieldExampleSentence.value = body.example_sentence || "";
+      if (fieldExampleTranslation) fieldExampleTranslation.value = body.example_translation || "";
+      if (fieldImage) fieldImage.value = body.image || "";
+      if (fieldAudio) fieldAudio.value = body.audio || "";
+      if (fieldTags) fieldTags.value = body.tags || "";
+      if (fieldNotes) fieldNotes.value = body.notes || "";
+      if (fieldSourceText) fieldSourceText.value = body.source_text || "";
+      if (fieldDeinflectedText) fieldDeinflectedText.value = body.deinflected_text || "";
+
+      if (fieldDeckSelect && body.deck_name) {
+        let hasDeck = Array.from(fieldDeckSelect.options).some(o => o.value === body.deck_name);
+        if (!hasDeck) {
+          const opt = document.createElement("option");
+          opt.value = body.deck_name;
+          opt.textContent = body.deck_name;
+          fieldDeckSelect.append(opt);
+        }
+        fieldDeckSelect.value = body.deck_name;
+      }
+      if (fieldDeckName) fieldDeckName.value = (fieldDeckSelect && fieldDeckSelect.value) || body.deck_name || "Default";
+
+      if (fieldModelSelect && body.model_name) {
+        let hasModel = Array.from(fieldModelSelect.options).some(o => o.value === body.model_name);
+        if (!hasModel) {
+          const opt = document.createElement("option");
+          opt.value = body.model_name;
+          opt.textContent = body.model_name;
+          fieldModelSelect.append(opt);
+        }
+        fieldModelSelect.value = body.model_name;
+      }
+      if (fieldModelName) fieldModelName.value = (fieldModelSelect && fieldModelSelect.value) || body.model_name || "";
+
+      if (expression) expression.textContent = body.expression || "—";
+      if (reading) reading.textContent = body.reading || "";
+
+      if (body.sync_status === "synced") {
+        updateSyncUI("synced");
+      } else if (body.sync_status === "failed") {
+        updateSyncUI("failed", body.sync_error);
+      } else {
+        updateSyncUI("pending");
+      }
+
+      if (Array.isArray(body.entries) && body.entries.length) {
+        renderDetails({ entries: body.entries });
+      }
+
+      if (saveBadge) {
+        saveBadge.textContent = "SAVED";
+        saveBadge.className = "badge saved";
+        saveBadge.hidden = false;
+      }
+      setStatus("Opened saved card from library.");
+    }
+  } catch (err) {
+    setStatus(`Failed to open card: ${err.message}`, true);
+  }
+}
+
+async function deleteLocalCard(cardId, cardExpr) {
+  const confirmed = window.confirm(`Delete local card "${cardExpr}"? This will not delete the note in Anki.`);
+  if (!confirmed) return;
+
+  try {
+    const res = await fetch(API_CARD_DETAIL_URL(cardId), { method: "DELETE" });
+    if (!res.ok) throw new Error("Failed to delete card.");
+
+    if (fieldCardId && fieldCardId.value === String(cardId)) {
+      fieldCardId.value = "";
+      if (fieldExpression) fieldExpression.value = "";
+      if (fieldReading) fieldReading.value = "";
+      if (fieldMeaning) fieldMeaning.value = "";
+      if (fieldHint) fieldHint.value = "";
+      if (fieldExampleSentence) fieldExampleSentence.value = "";
+      if (fieldExampleTranslation) fieldExampleTranslation.value = "";
+      if (fieldImage) fieldImage.value = "";
+      if (fieldAudio) fieldAudio.value = "";
+      if (fieldTags) fieldTags.value = "";
+      if (fieldNotes) fieldNotes.value = "";
+      if (expression) expression.textContent = "—";
+      if (reading) reading.textContent = "";
+      if (saveBadge) {
+        saveBadge.hidden = true;
+        saveBadge.textContent = "";
+      }
+      if (cardEditor) cardEditor.hidden = true;
+      updateSyncUI(ankiConnected ? "ready" : "not_connected");
+      selectedHistoryCardId = null;
+    }
+
+    setStatus(`Deleted "${cardExpr}" from local database.`);
+    await loadHistory();
+  } catch (err) {
+    setStatus(`Delete failed: ${err.message}`, true);
+  }
+}
+
+async function retrySyncFromHistory(cardId) {
+  try {
+    setStatus("Retrying Anki sync…");
+    const res = await fetch(API_CARD_SYNC_URL(cardId), { method: "POST", headers: { "Content-Type": "application/json" } });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.sync_status === "failed") {
+      const errMsg = data.error || data.detail || "Sync failed";
+      setStatus(`Anki sync retry failed: ${errMsg}`, true);
+    } else {
+      setStatus("Card synchronized to Anki.");
+    }
+    await loadHistory();
+    if (fieldCardId && fieldCardId.value === String(cardId)) {
+      if (data.sync_status === "synced") {
+        updateSyncUI("synced");
+      } else {
+        updateSyncUI("failed", data.error || data.detail);
+      }
+    }
+  } catch (err) {
+    setStatus(`Retry failed: ${formatErrorMessage(err)}`, true);
+  }
+}
+
+if (historySearchInput) {
+  historySearchInput.addEventListener("input", () => {
+    clearTimeout(searchDebounceTimeout);
+    searchDebounceTimeout = setTimeout(() => {
+      loadHistory();
+    }, 250);
+  });
+}
+
+if (historyDeckFilter) {
+  historyDeckFilter.addEventListener("change", () => {
+    loadHistory();
+  });
+}
+
+if (historySyncFilter) {
+  historySyncFilter.addEventListener("change", () => {
+    loadHistory();
+  });
+}
+
 // Initialization
 loadFontPreference().catch(() => {});
 loadDecks().catch(() => {});
 loadModels().catch(() => {});
+loadHistory().catch(() => {});
 
 // Default Yomitan indicator to ready state
 setIndicatorStatus(indicatorYomitan, "connected", "Yomitan: Ready");

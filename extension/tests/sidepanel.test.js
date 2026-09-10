@@ -29,11 +29,21 @@ assert.ok(html.includes('id="field-model-name"'), "Hidden model name input must 
 assert.ok(html.includes('<option value="Basic">Basic</option>'), "Default Basic model option must exist");
 assert.ok(html.includes('class="form-group model-selector-group"'), "Model selector container group must exist");
 
+// Phase 7 elements: History and Card Library
+assert.ok(html.includes('id="history-section"'), "History section must exist");
+assert.ok(html.includes('id="history-count"'), "History card counter element must exist");
+assert.ok(html.includes('id="history-search-input"'), "History search input must exist");
+assert.ok(html.includes('id="history-deck-filter"'), "History deck filter select must exist");
+assert.ok(html.includes('id="history-sync-filter"'), "History sync filter select must exist");
+assert.ok(html.includes('id="history-list-container"'), "History list container must exist");
+assert.ok(html.includes('id="history-empty"'), "History empty state message element must exist");
+assert.ok(html.includes('id="history-cards-list"'), "History cards list container must exist");
+
 // Verify default state
 assert.ok(html.includes('<option value="Default">Default</option>'), "Default deck option must exist");
 assert.ok(html.includes('id="sync-anki-btn" class="btn-sync" disabled'), "Sync button should start disabled");
 
-console.log("sidepanel HTML tests passed (Phase 4, 5 & 6 DOM verified)");
+console.log("sidepanel HTML tests passed (Phase 4, 5, 6 & 7 DOM verified)");
 
 // Verify updateSyncUI state machine
 const vm = require("node:vm");
@@ -83,3 +93,88 @@ assert.equal(mockStatus.className, "sync-status-label failed");
 assert.equal(mockStatus.title, "Timeout");
 
 console.log("sidepanel state machine tests passed");
+
+// Phase 7 Library helper tests
+const mockDeckSelect = {
+  options: [{ value: "Default", textContent: "Default" }],
+  value: "all",
+  append(opt) { this.options.push(opt); },
+};
+const mockFieldDeckSelect = {
+  options: [{ value: "Default" }, { value: "Anime Mining" }],
+};
+
+const libContext = {
+  document: {
+    createElement(tag) {
+      return {
+        tag,
+        className: "",
+        dataset: {},
+        textContent: "",
+        title: "",
+        children: [],
+        setAttribute(k, v) { this[k] = v; },
+        append(...els) { this.children.push(...els); },
+        addEventListener(event, fn) { this["on" + event] = fn; },
+        closest() { return null; },
+      };
+    },
+  },
+  historyDeckFilter: mockDeckSelect,
+  fieldDeckSelect: mockFieldDeckSelect,
+  historyCardsList: {
+    children: [],
+    replaceChildren() { this.children = []; },
+    append(item) { this.children.push(item); },
+  },
+  selectedHistoryCardId: 42,
+  API_CARD_SYNC_URL: (id) => `http://127.0.0.1:8000/api/cards/${id}/sync`,
+  API_CARD_DETAIL_URL: (id) => `http://127.0.0.1:8000/api/cards/${id}`,
+  openSavedCard: () => {},
+  deleteLocalCard: () => {},
+  retrySyncFromHistory: () => {},
+};
+
+const updateDeckFilterSrc = jsContent.slice(
+  jsContent.indexOf("function updateDeckFilterOptions"),
+  jsContent.indexOf("function renderHistoryCards")
+);
+vm.runInNewContext(updateDeckFilterSrc, libContext);
+libContext.updateDeckFilterOptions([
+  { deck_name: "Default" },
+  { deck_name: "Japanese Vocab" },
+]);
+
+const deckValues = mockDeckSelect.options.map(o => o.value);
+assert.ok(deckValues.includes("Default"), "Deck options should include Default");
+assert.ok(deckValues.includes("Anime Mining"), "Deck options should include Anime Mining");
+assert.ok(deckValues.includes("Japanese Vocab"), "Deck options should include Japanese Vocab");
+
+// Test renderHistoryCards
+const renderCardsSrc = jsContent.slice(
+  jsContent.indexOf("function renderHistoryCards"),
+  jsContent.indexOf("async function openSavedCard")
+);
+vm.runInNewContext(renderCardsSrc, libContext);
+libContext.renderHistoryCards([
+  { id: 42, expression: "映画", reading: "えいが", meaning: "movie", deck_name: "Default", sync_status: "synced" },
+  { id: 43, expression: "本", reading: "ほん", meaning: "book", deck_name: "Default", sync_status: "failed", sync_error: "Connection refused" },
+]);
+
+assert.equal(libContext.historyCardsList.children.length, 2, "Should render 2 history card items");
+const item1 = libContext.historyCardsList.children[0];
+assert.ok(item1.className.includes("selected"), "Card 42 should be marked selected");
+assert.equal(item1.dataset.cardId, "42");
+
+const item2 = libContext.historyCardsList.children[1];
+assert.ok(!item2.className.includes("selected"), "Card 43 should not be marked selected");
+assert.equal(item2.dataset.cardId, "43");
+
+// Verify failed card has retry button in actions
+const actionsDiv = item2.children.find(c => c.className === "history-item-actions");
+assert.ok(actionsDiv, "Item should contain actions div");
+const retryBtn = actionsDiv.children.find(c => c.className === "btn-history-retry");
+assert.ok(retryBtn, "Failed card should have a retry button");
+
+console.log("sidepanel Phase 7 history & card library tests passed");

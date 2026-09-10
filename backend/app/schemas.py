@@ -148,3 +148,56 @@ class SyncCardResponse(BaseModel):
     error: Optional[str] = None
     synced_at: Optional[str] = None
 
+
+class CardSummary(BaseModel):
+    id: int
+    expression: str
+    reading: str = ""
+    meaning: str = ""
+    deck_name: str = "Default"
+    model_name: str = ""
+    sync_status: str = "pending"
+    anki_note_id: Optional[int] = None
+    sync_error: str = ""
+    created_at: str
+    updated_at: str
+
+
+class CardListResponse(BaseModel):
+    cards: list[CardSummary] = []
+    total: int = 0
+    limit: int = 50
+    offset: int = 0
+
+
+class CardDetailResponse(BaseModel):
+    id: int
+    expression: str
+    reading: str = ""
+    meaning: str = ""
+    hint: str = ""
+    example_sentence: str = ""
+    example_translation: str = ""
+    image: str = ""
+    audio: str = ""
+    tags: str = ""
+    notes: str = ""
+    source_text: str = ""
+    deinflected_text: str = ""
+    deck_name: str = "Default"
+    model_name: str = ""
+    status: str = "saved"
+    sync_status: str = "pending"
+    anki_note_id: Optional[int] = None
+    sync_error: str = ""
+    synced_at: Optional[str] = None
+    created_at: str
+    updated_at: str
+    entries: list[dict] = []
+
+
+class DeleteCardResponse(BaseModel):
+    id: int
+    deleted: bool
+
+

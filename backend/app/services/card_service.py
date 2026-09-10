@@ -10,6 +10,10 @@ from app.schemas import (
     AnkiModelsResponse,
     AnkiStatusResponse,
     CaptureResponse,
+    CardDetailResponse,
+    CardListResponse,
+    CardSummary,
+    DeleteCardResponse,
     DictionaryEntry,
     SaveCardRequest,
     SaveCardResponse,
@@ -384,4 +388,83 @@ class CardService:
             return AnkiModelsResponse(models=models, connected=True)
         except Exception:
             return AnkiModelsResponse(models=["Basic"], connected=False)
+
+    def list_cards(
+        self,
+        search: str | None = None,
+        deck_name: str | None = None,
+        sync_status: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> CardListResponse:
+        """List and search cards from local SQLite persistence."""
+        records = self.repository.list_cards(
+            search=search,
+            deck_name=deck_name,
+            sync_status=sync_status,
+            limit=limit,
+            offset=offset,
+        )
+        total = self.repository.count_cards(
+            search=search,
+            deck_name=deck_name,
+            sync_status=sync_status,
+        )
+        cards = [
+            CardSummary(
+                id=r.id,
+                expression=r.expression,
+                reading=r.reading,
+                meaning=r.meaning,
+                deck_name=r.deck_name,
+                model_name=r.model_name,
+                sync_status=r.sync_status,
+                anki_note_id=r.anki_note_id,
+                sync_error=r.sync_error,
+                created_at=r.created_at,
+                updated_at=r.updated_at,
+            )
+            for r in records
+        ]
+        return CardListResponse(cards=cards, total=total, limit=limit, offset=offset)
+
+    def get_card(self, card_id: int) -> CardDetailResponse | None:
+        """Retrieve full details of a saved card by ID."""
+        record = self.repository.get_by_id(card_id)
+        if not record:
+            return None
+        return CardDetailResponse(
+            id=record.id,
+            expression=record.expression,
+            reading=record.reading,
+            meaning=record.meaning,
+            hint=record.hint,
+            example_sentence=record.example_sentence,
+            example_translation=record.example_translation,
+            image=record.image,
+            audio=record.audio,
+            tags=record.tags,
+            notes=record.notes,
+            source_text=record.source_text,
+            deinflected_text=record.deinflected_text,
+            deck_name=record.deck_name,
+            model_name=record.model_name,
+            status=record.status,
+            sync_status=record.sync_status,
+            anki_note_id=record.anki_note_id,
+            sync_error=record.sync_error,
+            synced_at=record.synced_at,
+            created_at=record.created_at,
+            updated_at=record.updated_at,
+            entries=record.entries,
+        )
+
+    def delete_card(self, card_id: int) -> bool:
+        """Delete a saved card from SQLite. Does not touch Anki notes."""
+        return self.repository.delete(card_id)
+
+    def get_saved_decks(self) -> list[str]:
+        """Retrieve distinct deck names from saved cards."""
+        return self.repository.get_saved_decks()
+
 
