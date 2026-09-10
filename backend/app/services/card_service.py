@@ -5,7 +5,16 @@ from dataclasses import asdict
 from typing import Any
 
 from app.repositories.card_repository import CardDraft, CardRecord, CardRepository
-from app.schemas import CaptureResponse, DictionaryEntry, SaveCardRequest, SaveCardResponse
+from app.schemas import (
+    AnkiDecksResponse,
+    AnkiStatusResponse,
+    CaptureResponse,
+    DictionaryEntry,
+    SaveCardRequest,
+    SaveCardResponse,
+    SyncCardResponse,
+)
+from app.services.anki_connect import AnkiConnectService, AnkiError
 from app.services.yomitan import YomitanError, YomitanService
 
 
@@ -16,9 +25,11 @@ class CardService:
         self,
         yomitan_service: YomitanService | None = None,
         card_repository: CardRepository | None = None,
+        anki_service: AnkiConnectService | None = None,
     ):
         self.yomitan = yomitan_service or YomitanService()
         self.repository = card_repository or CardRepository()
+        self.anki = anki_service or AnkiConnectService()
 
     def capture_term(self, text: str, deck_name: str = "Default") -> CaptureResponse:
         """
@@ -76,6 +87,8 @@ class CardService:
                 dictionary_error=enriched.dictionary_error,
                 deck_name=existing.deck_name,
                 status="already_saved",
+                sync_status=existing.sync_status,
+                anki_note_id=existing.anki_note_id,
                 is_duplicate=True,
                 is_new=False,
                 is_updated=False,
@@ -102,6 +115,8 @@ class CardService:
             dictionary_error=enriched.dictionary_error,
             deck_name=deck_name,
             status="draft",
+            sync_status="pending",
+            anki_note_id=None,
             is_duplicate=False,
             is_new=False,
             is_updated=False,
@@ -153,6 +168,10 @@ class CardService:
             deinflected_text=record.deinflected_text,
             deck_name=record.deck_name,
             status=status,
+            sync_status=record.sync_status,
+            anki_note_id=record.anki_note_id,
+            sync_error=record.sync_error,
+            synced_at=record.synced_at,
             is_duplicate=is_duplicate,
             is_new=is_new,
             is_updated=is_updated,
@@ -227,9 +246,119 @@ class CardService:
             dictionary_error=enriched.dictionary_error,
             deck_name=card_record.deck_name,
             status=status,
+            sync_status=card_record.sync_status,
+            anki_note_id=card_record.anki_note_id,
             is_duplicate=is_duplicate,
             is_new=is_new,
             is_updated=is_updated,
             created_at=card_record.created_at,
             updated_at=card_record.updated_at,
         )
+
+    def sync_card(self, card_id: int) -> SyncCardResponse:
+        """
+        Synchronize one locally saved card to AnkiConnect.
+        Invariants:
+        - SQLite remains authoritative; local card is never deleted or rolled back on failure.
+        - Check Anki duplicate identity before note creation.
+        - Link existing Anki note ID if found.
+        - Safe retry without creating duplicates.
+        """
+        card = self.repository.get_by_id(card_id)
+        if not card:
+            raise ValueError(f"Card with ID {card_id} does not exist.")
+
+        # If already marked synced and has anki_note_id, return status immediately
+        if card.sync_status == "synced" and card.anki_note_id:
+            return SyncCardResponse(
+                id=card.id,
+                sync_status="synced",
+                anki_note_id=card.anki_note_id,
+                deck_name=card.deck_name,
+                synced_at=card.synced_at,
+            )
+
+        # Transition to syncing in SQLite
+        self.repository.mark_syncing(card_id)
+
+        try:
+            # 1. Duplicate check in Anki (by expression + reading in target deck)
+            existing_note_id = self.anki.find_existing_note(
+                deck_name=card.deck_name,
+                expression=card.expression,
+                reading=card.reading,
+            )
+
+            if existing_note_id is not None:
+                updated = self.repository.mark_synced(card_id, existing_note_id)
+                return SyncCardResponse(
+                    id=card.id,
+                    sync_status="synced",
+                    anki_note_id=existing_note_id,
+                    deck_name=card.deck_name,
+                    synced_at=updated.synced_at if updated else None,
+                )
+
+            # 2. Add note to Anki
+            card_data = {
+                "expression": card.expression,
+                "reading": card.reading,
+                "meaning": card.meaning,
+                "hint": card.hint,
+                "example_sentence": card.example_sentence,
+                "example_translation": card.example_translation,
+                "image": card.image,
+                "audio": card.audio,
+                "tags": card.tags,
+                "notes": card.notes,
+            }
+            tags_list = [t.strip() for t in card.tags.split(",") if t.strip()] if card.tags else []
+
+            new_note_id = self.anki.add_note(
+                deck_name=card.deck_name,
+                card_data=card_data,
+                tags=tags_list,
+            )
+
+            updated = self.repository.mark_synced(card_id, new_note_id)
+            return SyncCardResponse(
+                id=card.id,
+                sync_status="synced",
+                anki_note_id=new_note_id,
+                deck_name=card.deck_name,
+                synced_at=updated.synced_at if updated else None,
+            )
+
+        except Exception as error:
+            error_message = str(error)
+            self.repository.mark_failed(card_id, error_message)
+            return SyncCardResponse(
+                id=card.id,
+                sync_status="failed",
+                anki_note_id=card.anki_note_id,
+                deck_name=card.deck_name,
+                error=error_message,
+                synced_at=card.synced_at,
+            )
+
+    def get_anki_status(self) -> AnkiStatusResponse:
+        """Check AnkiConnect reachability and version."""
+        connected, error_msg = self.anki.is_connected()
+        if not connected:
+            return AnkiStatusResponse(connected=False, error=error_msg)
+        try:
+            version = self.anki.get_version()
+            return AnkiStatusResponse(connected=True, version=version)
+        except Exception as error:
+            return AnkiStatusResponse(connected=False, error=str(error))
+
+    def get_anki_decks(self) -> AnkiDecksResponse:
+        """Retrieve deck list from AnkiConnect or fallback to ['Default']."""
+        try:
+            decks = self.anki.list_decks()
+            if "Default" not in decks:
+                decks = ["Default"] + decks
+            return AnkiDecksResponse(decks=decks, connected=True)
+        except Exception:
+            return AnkiDecksResponse(decks=["Default"], connected=False)
+

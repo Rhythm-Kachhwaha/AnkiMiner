@@ -2,10 +2,10 @@
 
 ## Current status
 
-Phase 3.3 (CARD EDITOR) is fully implemented and end-to-end verified across the complete live stack (Brave + Yomitan + FastAPI + SQLite).
-All automated backend tests pass (33/33 pytest tests).
-Extension unit tests pass (1/1 node test).
-All live browser pipeline verification checks pass with 100% success.
+Phase 4 (ANKICONNECT SYNCHRONIZATION + DECK CONFIGURATION) is fully implemented and independently verified by the Phase 4 verification agent (2026-09-10).
+All automated backend tests pass (65/65 pytest tests — 5 new regression tests added during verification).
+Extension unit, DOM contract, and state machine tests pass (2/2 node tests).
+All live AnkiConnect integration checks pass against real Anki at `http://127.0.0.1:8765` across both Japanese mining and standard Basic note models.
 
 ## Implemented
 
@@ -52,54 +52,91 @@ All live browser pipeline verification checks pass with 100% success.
   - Progressive disclosure for optional fields: `[+ Optional fields]` toggle expands/collapses `Hint`, `Example sentence`, `Example translation`, `Image`, `Audio`, `Tags`, `Notes`.
   - Explicit `[Save Card]` button handles submission, disables during in-flight network request, updates `#save-badge` to `[SAVED]` / `[ALREADY SAVED]`, and updates session count only for newly saved cards.
 
+### Phase 4 (AnkiConnect Synchronization + Deck Configuration)
+
+- **Isolated AnkiConnect Service (`app/services/anki_connect.py`)**:
+  - Encapsulates all JSON-RPC HTTP transport using standard library `urllib` (zero external dependencies).
+  - Handles connection refused (`AnkiConnectionError`), timeouts (`AnkiTimeoutError`), malformed responses (`AnkiResponseError`), and AnkiConnect errors (`AnkiActionError`).
+  - Supports `version`, `deckNames`, `createDeck`, `modelNames`, `modelFieldNames`, `findNotes`, `notesInfo`, `addNote`.
+  - Safe query sanitization and application-level candidate verification preventing injection.
+  - Deterministic note model resolution checking for prompt/answer field coverage (prioritizing Japanese mining models or standard `Basic`).
+  - HTML tag stripping and entity decoding for Anki candidate fields.
+  - Composite bracketed reading extraction (`Front: "映画 [えいが]"`) ensuring standard `Basic` model notes are accurately detected across local database resets.
+- **Database Schema Sync State & Safe Migrations (`app/db/connection.py`)**:
+  - Added sync columns to SQLite `cards` table: `sync_status` (defaults to `'pending'`), `anki_note_id` (INTEGER NULL), `sync_error` (TEXT DEFAULT ''), `synced_at` (TEXT NULL).
+  - Migration in `init_db()` safely alters tables without data loss.
+- **CardRepository Sync Methods (`app/repositories/card_repository.py`)**:
+  - Added `mark_syncing`, `mark_synced`, `mark_failed`, `set_anki_note_id`, `get_pending_or_failed_cards`, `get_sync_state`.
+  - Preserves local card integrity across all operations.
+- **CardService Sync Orchestration (`app/services/card_service.py`)**:
+  - SQLite persistence succeeds independently of Anki availability. Saving never fails due to Anki being offline.
+  - `sync_card(card_id)` orchestrates duplicate checks in Anki, note creation, and sync state transitions.
+  - Duplicate detection in Anki associates existing `anki_note_id` without creating duplicates across local DB resets.
+  - Failed syncs transition to `sync_status = 'failed'` with diagnostics, allowing safe retries.
+- **Backend API Routes (`app/main.py`)**:
+  - `GET /api/anki/status` returns reachability and Anki version.
+  - `GET /api/anki/decks` returns available decks (fallback to `['Default']`).
+  - `POST /api/cards/{id}/sync` synchronizes a card to Anki.
+- **Side Panel UI (`sidepanel.html`, `sidepanel.css`, `sidepanel.js`)**:
+  - Compact native Deck `<select id="field-deck-select">` with local storage persistence of last-used deck.
+  - Explicit `[Send to Anki]` button (`#sync-anki-btn`) with states: `Ready`, `Sending…`, `Sent to Anki`, `Retry Send to Anki`.
+  - Anki sync status feedback (`#anki-sync-status`) displaying `Anki: Ready`, `Anki: Not connected`, `Anki: Pending`, `Anki: Syncing…`, `Anki: Synced`, `Anki: Failed — retry`.
+  - Retry on failed status label click.
+
 ## Verified
 
-- **Automated backend test suite (33/33 passed)**:
-  - `test_card_editor.py` (13 tests):
-    1. New card draft creation without auto-save.
-    2. Editing expression before save.
-    3. Editing reading before save.
-    4. Editing meaning before save.
-    5. Saving optional fields (hint, example sentences, tags, notes).
-    6. Save creates exactly one SQLite row.
-    7. Duplicate save does not create another row.
-    8. Existing card loads into editor with existing values.
-    9. Editing existing card updates the existing row in place.
-    10. Editing existing card does not increment session count.
-    11. New card save increments session count (`is_new: True`).
-    12. Duplicate capture does not increment session count (`is_duplicate: True`).
-    13. Validation errors (blank expression) reject save and do not create DB rows.
-  - `test_card_repository.py` (7 tests): all CRUD and duplicate prevention tests pass.
-  - `test_capture_integration.py` (4 tests): end-to-end capture and save integration tests pass.
-  - `test_capture_route.py` (1 test): route delegation passes.
-  - `test_dictionary.py` (3 tests): dictionary parsing and error handling pass.
-  - `test_yomitan.py` (5 tests): tokenization, deinflection, script variants, and network error handling pass.
-- **Automated extension unit tests (1/1 passed)**:
-  - `capture-utils.test.js`: text normalization and Japanese script boundary tests pass.
-- **Live Brave + Yomitan + FastAPI + SQLite end-to-end browser test (100% passed)**:
-  - Extension loaded into real Brave browser via CDP with Side Panel and mining toggle enabled.
-  - Session counter starts at `Cards this session: 0`, editor initially hidden.
-  - Selecting `映画` loads draft (Expression: `映画`, Reading: `えいが`, Meaning populated). SQLite card count before save remains `0` (no auto-persist verified).
-  - Edited meaning to `movie / film` and clicked `[Save Card]`: badge updated to `[SAVED]`, session counter incremented to `Cards this session: 1`, SQLite row count = `1`.
-  - Selecting `日にち` loaded draft, edited meaning to `date / schedule`, saved: badge `[SAVED]`, session counter incremented to `Cards this session: 2`, SQLite row count = `2`.
-  - Selecting `映画` again: loaded existing card into editor, badge displayed `[ALREADY SAVED]`, session counter remained `2`, SQLite count remained `2`.
-  - Edited existing card to `movie / film (updated)` and saved: badge displayed `[SAVED]`, session counter remained `Cards this session: 2` (did not increment), SQLite count remained `2`, and existing row was updated.
-  - Tested optional fields with `日本`: clicked `[+ Optional fields]` toggle, revealed fields, filled Hint, Tags, Notes, and saved: badge `[SAVED]`, session counter incremented to `3`, optional fields verified in SQLite.
-  - Phase 2 regression verified with script variants and deinflection:
-    - `こんにちは` (hiragana) → saved (`Cards this session: 4`, DB count 4).
-    - `カメラ` (katakana) → saved (`Cards this session: 5`, DB count 5).
-    - `食べる` (verb/mixed) → saved (`Cards this session: 6`, DB count 6).
-    - `見た` (deinflection → `見る`) → saved (`Cards this session: 7`, DB count 7).
-  - Dynamic subtitles without page reload verified:
-    - `映画を見る` → selected `映画` → loaded `[ALREADY SAVED]`.
-    - Subtitle advanced to `日にちを決める` without reload → selected `日にち` → loaded `[ALREADY SAVED]`.
-    - Subtitle advanced to `日本へ行く` without reload → selected `日本` → loaded `[ALREADY SAVED]`.
-    - Selected new word `行く` from dynamic subtitle → loaded draft, saved → `Cards this session: 8`, SQLite final count = `8`.
+- **Automated backend test suite (65/65 passed)** — run 2026-09-10 by Phase 4 verification agent:
+  - `test_anki_connect.py` (17 tests — 5 regression tests added during verification):
+    - version request, list decks, create deck.
+    - connection refused, timeout, malformed JSON, action error.
+    - candidate search, safe query escaping.
+    - empty expression guard: `find_existing_note` with empty expression returns `None` without issuing a broad deck query.
+    - deterministic Basic and Japanese model field mappings, note creation.
+    - **new**: Basic model bracketed reading duplicate detection (`Front: "映画 [えいが]"` accurately matched).
+    - **new**: HTML-formatted field values stripping and matching.
+    - **new**: Homonym differentiation: same expression with different reading is rejected as duplicate candidate.
+    - **new**: Deck filtering: note with matching expression in a different deck is skipped.
+  - `test_anki_loopback_http.py` (6 tests):
+    - live HTTP loopback server testing real socket requests, JSON-RPC, error handling, connection refused.
+  - `test_sync_lifecycle.py` (9 tests):
+    - schema migration on existing DBs preserving rows and defaulting `sync_status = 'pending'`.
+    - repository state transitions (`mark_syncing`, `mark_synced`, `mark_failed`).
+    - local save succeeding independently with Anki offline.
+    - sync success marking card synced and populating `anki_note_id` and `synced_at`.
+    - sync failure preserving local SQLite card and marking failed.
+    - duplicate Anki note detection linking existing note ID without calling `add_note`.
+    - already-synced cards not duplicated.
+    - safe retry after failure.
+    - API endpoints (`status`, `decks`, `sync`, 404 validation).
+  - All 33 previous tests (`test_card_editor.py`, `test_card_repository.py`, `test_capture_integration.py`, `test_capture_route.py`, `test_dictionary.py`, `test_yomitan.py`) pass without regressions.
+- **Automated extension unit & contract tests (2/2 passed)**:
+  - `capture-utils.test.js`: boundary and script tests pass (supports execution from both project root and extension dir).
+  - `sidepanel.test.js`: deck selector, sync button, and sync status DOM contract tests pass; `updateSyncUI` state machine transitions verified (`ready`, `pending`, `syncing`, `synced`, `failed`).
+- **Live AnkiConnect integration verification against real Anki (`http://127.0.0.1:8765`)** — run 2026-09-10 by Phase 4 verification agent:
+  - Connection verified: `connected=True, version=6`.
+  - Deck retrieval: `['Default', 'Kaishi 1.5k', 'n3 mining']`.
+  - Note model resolved: `japanese mining`, fields `['Front', 'Back', 'word', 'Audio', 'Image', 'Source', 'URL']`.
+  - Local save: test card `AnkiMiner検証Live` saved to SQLite with `sync_status='pending'`.
+  - Explicit sync: note created with Anki Note ID `1789045826061`, SQLite updated to `sync_status='synced'`.
+  - Second sync: no duplicate created; existing `anki_note_id` returned.
+  - DB reset duplicate prevention: card deleted from SQLite, re-saved locally, synced — `find_existing_note` located the existing Anki note and linked it without creating a duplicate.
+  - Cleanup verified: temporary note deleted from Anki, temporary SQLite database removed.
+  - Standard `Basic` model live verification: card created with `ANKI_NOTE_MODEL="Basic"`, note created with `Front: "AnkiMinerBasicTest [ankiminerbasictest]"`, SQLite reset, re-mined card synced — duplicate detection successfully discovered and linked existing note ID `1789045861040` without duplicate creation; test note deleted from Anki afterward.
+
+## Bugs fixed during verification
+
+1. **`find_existing_note` Basic model duplicate detection failure**: Notes saved under standard `Basic` note models format `Front` as `f"{expr} [{reading}]"`. In `find_existing_note`, comparing `normalize_expression(found_expr) == norm_target_expr` failed because `"映画 [えいが]" != "映画"`, causing duplicate notes to be created on DB resets. Fixed to extract base expression and bracketed reading candidate.
+2. **`find_existing_note` HTML-formatted fields**: Anki fields with HTML formatting or entities (e.g. `<div>`, `&nbsp;`) failed string equality checks. Added `_clean_field_text` to strip HTML tags and decode entities before normalization.
+3. **`find_existing_note` empty expression guard**: When expression reduced to empty after sanitization, the query fell through to `deck:"<deck>"`, returning all notes in the deck. Added immediate `return None` guard.
+4. **Extension test runner path resolution**: `capture-utils.test.js` and `sidepanel.test.js` failed with `ENOENT` when run from `extension/` directory because of hardcoded `extension/...` paths. Updated to use `path.resolve(__dirname, ...)`.
+5. **Extension backend connection diagnostics (`Failed to fetch`)**: When the local FastAPI backend was not running on `http://127.0.0.1:8000`, the browser threw `TypeError: Failed to fetch`. `sidepanel.js` rendered this raw browser message without explanation. Added `formatErrorMessage` in `sidepanel.js` mapping network failures to clear, actionable guidance (`Cannot connect to backend. Ensure FastAPI server is running on http://127.0.0.1:8000`). Started the FastAPI backend server daemon process (`python -m uvicorn app.main:app --host 127.0.0.1 --port 8000`), restoring live capture, SQLite persistence, and Anki connectivity in the extension.
 
 ## Known issues
 
-- None. Phase 3.3 is fully operational and verified live.
+- None. Phase 4 is complete and fully verified.
 
 ## Next task
 
-Phase 4 planning: AnkiConnect synchronization and deck configuration.
+Phase 4 complete and independently verified. Await user instructions for future phases.
+
+

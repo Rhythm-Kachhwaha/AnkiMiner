@@ -31,6 +31,10 @@ CREATE TABLE IF NOT EXISTS cards (
     meanings_json TEXT NOT NULL DEFAULT '[]',
     examples_json TEXT NOT NULL DEFAULT '[]',
     status TEXT NOT NULL DEFAULT 'saved',
+    sync_status TEXT NOT NULL DEFAULT 'pending',
+    anki_note_id INTEGER DEFAULT NULL,
+    sync_error TEXT NOT NULL DEFAULT '',
+    synced_at TEXT DEFAULT NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     UNIQUE(normalized_expression, normalized_reading, normalized_deck_name)
@@ -88,6 +92,10 @@ def init_db(db_path: Path | str | None = None) -> None:
             ("audio", "TEXT NOT NULL DEFAULT ''"),
             ("tags", "TEXT NOT NULL DEFAULT ''"),
             ("notes", "TEXT NOT NULL DEFAULT ''"),
+            ("sync_status", "TEXT NOT NULL DEFAULT 'pending'"),
+            ("anki_note_id", "INTEGER DEFAULT NULL"),
+            ("sync_error", "TEXT NOT NULL DEFAULT ''"),
+            ("synced_at", "TEXT DEFAULT NULL"),
         ]
         for col_name, col_def in new_cols:
             if col_name not in columns:

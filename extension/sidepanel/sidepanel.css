@@ -173,6 +173,7 @@ section {
 }
 
 .form-group input,
+.form-group select,
 .form-group textarea {
   background: #252320;
   border: 1px solid #3d3a35;
@@ -186,6 +187,7 @@ section {
 }
 
 .form-group input:focus,
+.form-group select:focus,
 .form-group textarea:focus {
   outline: none;
   border-color: #cc785c;
@@ -259,6 +261,61 @@ section {
   background: #3d3a35;
   color: #a09d96;
   cursor: not-allowed;
+}
+
+.sync-actions {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.btn-sync {
+  background: #252320;
+  border: 1px solid #3d3a35;
+  border-radius: 8px;
+  color: #faf9f5;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  width: 100%;
+  min-height: 36px;
+  padding: 8px 12px;
+}
+
+.btn-sync:hover:not(:disabled) {
+  border-color: #cc785c;
+  color: #ffffff;
+}
+
+.btn-sync:disabled {
+  background: #1f1e1b;
+  border-color: #2d2b27;
+  color: #6c6a64;
+  cursor: not-allowed;
+}
+
+.sync-status-label {
+  font-size: 12px;
+  color: #a09d96;
+  text-align: center;
+  line-height: 1.4;
+}
+
+.sync-status-label.pending {
+  color: #e8a55a;
+}
+
+.sync-status-label.syncing {
+  color: #cc785c;
+}
+
+.sync-status-label.synced {
+  color: #5db872;
+}
+
+.sync-status-label.failed {
+  color: #e8a55a;
 }
 
 /* Dictionary Details */

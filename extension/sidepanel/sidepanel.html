@@ -34,6 +34,13 @@
         <input type="hidden" id="field-deinflected-text" name="deinflected_text">
 
         <div class="form-group">
+          <label for="field-deck-select">Deck</label>
+          <select id="field-deck-select" name="deck_select">
+            <option value="Default">Default</option>
+          </select>
+        </div>
+
+        <div class="form-group">
           <label for="field-expression">Expression</label>
           <input type="text" id="field-expression" name="expression" required autocomplete="off">
         </div>
@@ -87,6 +94,10 @@
 
         <div class="editor-actions">
           <button type="submit" id="save-card-btn" class="btn-save">Save Card</button>
+          <div class="sync-actions">
+            <button type="button" id="sync-anki-btn" class="btn-sync" disabled>Send to Anki</button>
+            <span id="anki-sync-status" class="sync-status-label">Anki: Not connected</span>
+          </div>
         </div>
       </form>
 

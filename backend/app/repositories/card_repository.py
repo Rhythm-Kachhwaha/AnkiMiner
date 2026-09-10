@@ -30,6 +30,10 @@ class CardDraft:
     entries: list[Any] = field(default_factory=list)
     examples: list[Any] = field(default_factory=list)
     status: str = "saved"
+    sync_status: str = "pending"
+    anki_note_id: int | None = None
+    sync_error: str = ""
+    synced_at: str | None = None
     id: int | None = None
 
 
@@ -57,6 +61,10 @@ class CardRecord:
     status: str
     created_at: str
     updated_at: str
+    sync_status: str = "pending"
+    anki_note_id: int | None = None
+    sync_error: str = ""
+    synced_at: str | None = None
     entries: list[dict] = field(default_factory=list)
     examples: list[dict] = field(default_factory=list)
 
@@ -90,6 +98,9 @@ def _row_to_record(row: sqlite3.Row) -> CardRecord:
     def _get(key: str, default: str = "") -> str:
         return row[key] if key in row.keys() and row[key] is not None else default
 
+    anki_note_id = row["anki_note_id"] if "anki_note_id" in row.keys() and row["anki_note_id"] is not None else None
+    synced_at = row["synced_at"] if "synced_at" in row.keys() and row["synced_at"] is not None else None
+
     return CardRecord(
         id=row["id"],
         expression=row["expression"],
@@ -113,6 +124,10 @@ def _row_to_record(row: sqlite3.Row) -> CardRecord:
         status=row["status"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+        sync_status=_get("sync_status", "pending"),
+        anki_note_id=anki_note_id,
+        sync_error=_get("sync_error", ""),
+        synced_at=synced_at,
         entries=entries,
         examples=examples,
     )
@@ -134,7 +149,8 @@ class CardRepository:
                 SELECT id, expression, reading, meaning, hint, example_sentence, example_translation,
                        image, audio, tags, notes, source_text, deinflected_text, deck_name,
                        normalized_expression, normalized_reading, normalized_deck_name,
-                       meanings_json, examples_json, status, created_at, updated_at
+                       meanings_json, examples_json, status, created_at, updated_at,
+                       sync_status, anki_note_id, sync_error, synced_at
                 FROM cards
                 WHERE normalized_expression = ? AND normalized_reading = ? AND normalized_deck_name = ?
                 """,
@@ -152,7 +168,8 @@ class CardRepository:
                 SELECT id, expression, reading, meaning, hint, example_sentence, example_translation,
                        image, audio, tags, notes, source_text, deinflected_text, deck_name,
                        normalized_expression, normalized_reading, normalized_deck_name,
-                       meanings_json, examples_json, status, created_at, updated_at
+                       meanings_json, examples_json, status, created_at, updated_at,
+                       sync_status, anki_note_id, sync_error, synced_at
                 FROM cards
                 WHERE id = ?
                 """,
@@ -254,8 +271,9 @@ class CardRepository:
                         expression, reading, meaning, hint, example_sentence, example_translation,
                         image, audio, tags, notes, source_text, deinflected_text, deck_name,
                         normalized_expression, normalized_reading, normalized_deck_name,
-                        meanings_json, examples_json, status, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        meanings_json, examples_json, status, sync_status, anki_note_id,
+                        sync_error, synced_at, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         draft.expression,
@@ -277,6 +295,10 @@ class CardRepository:
                         meanings_json,
                         examples_json,
                         draft.status,
+                        draft.sync_status,
+                        draft.anki_note_id,
+                        draft.sync_error,
+                        draft.synced_at,
                         now_utc,
                         now_utc,
                     ),
@@ -299,3 +321,92 @@ class CardRepository:
         """Backward-compatible save method returning (record, is_new)."""
         record, is_new, _, _ = self.save_or_update(draft)
         return record, is_new
+
+    def mark_syncing(self, card_id: int) -> CardRecord | None:
+        """Mark a card's sync_status as syncing."""
+        now_utc = datetime.now(timezone.utc).isoformat()
+        with db_session(self._db_path) as conn:
+            conn.execute(
+                "UPDATE cards SET sync_status = 'syncing', updated_at = ? WHERE id = ?",
+                (now_utc, card_id),
+            )
+            conn.commit()
+        return self.get_by_id(card_id)
+
+    def mark_synced(self, card_id: int, anki_note_id: int) -> CardRecord | None:
+        """Mark a card as successfully synced to Anki."""
+        now_utc = datetime.now(timezone.utc).isoformat()
+        with db_session(self._db_path) as conn:
+            conn.execute(
+                """
+                UPDATE cards SET
+                    sync_status = 'synced',
+                    anki_note_id = ?,
+                    sync_error = '',
+                    synced_at = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (anki_note_id, now_utc, now_utc, card_id),
+            )
+            conn.commit()
+        return self.get_by_id(card_id)
+
+    def mark_failed(self, card_id: int, error_message: str) -> CardRecord | None:
+        """Mark a card as failed to sync to Anki."""
+        now_utc = datetime.now(timezone.utc).isoformat()
+        with db_session(self._db_path) as conn:
+            conn.execute(
+                """
+                UPDATE cards SET
+                    sync_status = 'failed',
+                    sync_error = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (error_message, now_utc, card_id),
+            )
+            conn.commit()
+        return self.get_by_id(card_id)
+
+    def set_anki_note_id(self, card_id: int, anki_note_id: int) -> CardRecord | None:
+        """Associate an Anki note ID with a card."""
+        now_utc = datetime.now(timezone.utc).isoformat()
+        with db_session(self._db_path) as conn:
+            conn.execute(
+                "UPDATE cards SET anki_note_id = ?, updated_at = ? WHERE id = ?",
+                (anki_note_id, now_utc, card_id),
+            )
+            conn.commit()
+        return self.get_by_id(card_id)
+
+    def get_pending_or_failed_cards(self) -> list[CardRecord]:
+        """Retrieve all cards with sync_status in ('pending', 'failed')."""
+        with db_session(self._db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT id, expression, reading, meaning, hint, example_sentence, example_translation,
+                       image, audio, tags, notes, source_text, deinflected_text, deck_name,
+                       normalized_expression, normalized_reading, normalized_deck_name,
+                       meanings_json, examples_json, status, created_at, updated_at,
+                       sync_status, anki_note_id, sync_error, synced_at
+                FROM cards
+                WHERE sync_status IN ('pending', 'failed')
+                ORDER BY id ASC
+                """
+            ).fetchall()
+            return [_row_to_record(row) for row in rows]
+
+    def get_sync_state(self, card_id: int) -> dict[str, Any] | None:
+        """Retrieve the sync state of a card."""
+        card = self.get_by_id(card_id)
+        if not card:
+            return None
+        return {
+            "id": card.id,
+            "sync_status": card.sync_status,
+            "anki_note_id": card.anki_note_id,
+            "sync_error": card.sync_error,
+            "synced_at": card.synced_at,
+            "deck_name": card.deck_name,
+        }

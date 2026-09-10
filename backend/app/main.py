@@ -4,7 +4,15 @@ from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.db.connection import init_db
-from app.schemas import CaptureRequest, CaptureResponse, SaveCardRequest, SaveCardResponse
+from app.schemas import (
+    AnkiDecksResponse,
+    AnkiStatusResponse,
+    CaptureRequest,
+    CaptureResponse,
+    SaveCardRequest,
+    SaveCardResponse,
+    SyncCardResponse,
+)
 from app.services.card_service import CardService
 from app.services.yomitan import YomitanError, YomitanService
 
@@ -40,4 +48,26 @@ def capture_term(request: CaptureRequest) -> CaptureResponse:
 def save_card(request: SaveCardRequest) -> SaveCardResponse:
     service = CardService()
     return service.save_card(request)
+
+
+@app.get("/api/anki/status", response_model=AnkiStatusResponse)
+def get_anki_status() -> AnkiStatusResponse:
+    service = CardService()
+    return service.get_anki_status()
+
+
+@app.get("/api/anki/decks", response_model=AnkiDecksResponse)
+def get_anki_decks() -> AnkiDecksResponse:
+    service = CardService()
+    return service.get_anki_decks()
+
+
+@app.post("/api/cards/{card_id}/sync", response_model=SyncCardResponse)
+def sync_card(card_id: int) -> SyncCardResponse:
+    service = CardService()
+    try:
+        return service.sync_card(card_id)
+    except ValueError as error:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+
 

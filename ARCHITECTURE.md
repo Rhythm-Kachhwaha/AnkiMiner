@@ -57,7 +57,18 @@ JLPT resolution comes from a local replaceable vocabulary-level dataset/service 
 
 ### AnkiConnect
 
-AnkiConnect's default endpoint is `http://127.0.0.1:8765`. It handles normal-operation note creation, deck handling, external duplicate checks, and later synchronization of pending cards. Endpoint settings may exist for diagnostics/future flexibility, but there is no setup wizard.
+AnkiConnect's default endpoint is `http://127.0.0.1:8765` (configurable via `ANKICONNECT_URL`). `AnkiConnectService` is the sole integration boundary and encapsulates all JSON-RPC transport using Python standard library `urllib`.
+
+The card synchronization flow enforces:
+1. **SQLite-first persistence**: Cards must be saved in SQLite before any AnkiConnect operation. An AnkiConnect outage, error, or rejection leaves the local card intact with `sync_status = 'failed'`.
+2. **Explicit user trigger**: Saving a card does not automatically push to Anki; the user explicitly triggers synchronization via the "Send to Anki" action.
+3. **Sync lifecycle state machine**:
+   - `pending`: Local card saved, not yet synchronized.
+   - `syncing`: In-flight synchronization request.
+   - `synced`: Successfully created in Anki or linked to an existing matching note, with `anki_note_id` and `synced_at` populated.
+   - `failed`: AnkiConnect returned an error, timed out, or connection was refused, with `sync_error` diagnostic saved. Recoverable via retry.
+4. **Duplicate detection across resets**: Before creating a note, `AnkiConnectService` queries candidates with `findNotes` and inspects actual fields with `notesInfo`. Matching normalized expression and reading in the target deck links the existing `anki_note_id` without creating a duplicate.
+5. **Deterministic note model mapping**: Detects available models with prompt (`front`/`expression`/`word`) and answer (`back`/`meaning`/`definition`) fields, prioritizing Japanese mining models or standard `Basic`, populating core fields and optional extras (audio, image) without arbitrary guessing.
 
 ## Architectural decisions
 

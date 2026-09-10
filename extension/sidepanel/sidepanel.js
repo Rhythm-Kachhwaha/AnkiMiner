@@ -1,5 +1,8 @@
 const API_CAPTURE_URL = "http://127.0.0.1:8000/api/capture";
 const API_SAVE_URL = "http://127.0.0.1:8000/api/cards/save";
+const API_ANKI_STATUS_URL = "http://127.0.0.1:8000/api/anki/status";
+const API_ANKI_DECKS_URL = "http://127.0.0.1:8000/api/anki/decks";
+const API_CARD_SYNC_URL = (id) => `http://127.0.0.1:8000/api/cards/${id}/sync`;
 
 const toggle = document.querySelector("#mining-toggle");
 const mode = document.querySelector("#mode");
@@ -15,6 +18,7 @@ const examples = document.querySelector("#examples");
 const cardEditor = document.querySelector("#card-editor");
 const fieldCardId = document.querySelector("#field-card-id");
 const fieldDeckName = document.querySelector("#field-deck-name");
+const fieldDeckSelect = document.querySelector("#field-deck-select");
 const fieldSourceText = document.querySelector("#field-source-text");
 const fieldDeinflectedText = document.querySelector("#field-deinflected-text");
 const fieldExpression = document.querySelector("#field-expression");
@@ -30,15 +34,128 @@ const fieldAudio = document.querySelector("#field-audio");
 const fieldTags = document.querySelector("#field-tags");
 const fieldNotes = document.querySelector("#field-notes");
 const saveCardBtn = document.querySelector("#save-card-btn");
+const syncAnkiBtn = document.querySelector("#sync-anki-btn");
+const ankiSyncStatus = document.querySelector("#anki-sync-status");
 
 let miningMode = false;
 let currentCaptureId = 0;
 let sessionCardCount = 0;
+let ankiConnected = false;
+
+function updateSyncUI(state, error = "") {
+  if (!ankiSyncStatus || !syncAnkiBtn) return;
+  ankiSyncStatus.title = error || "";
+
+  switch (state) {
+    case "ready":
+      syncAnkiBtn.disabled = true;
+      syncAnkiBtn.textContent = "Send to Anki";
+      ankiSyncStatus.textContent = "Anki: Ready";
+      ankiSyncStatus.className = "sync-status-label";
+      break;
+    case "not_connected":
+      syncAnkiBtn.disabled = true;
+      syncAnkiBtn.textContent = "Send to Anki";
+      ankiSyncStatus.textContent = "Anki: Not connected";
+      ankiSyncStatus.className = "sync-status-label";
+      break;
+    case "pending":
+      syncAnkiBtn.disabled = false;
+      syncAnkiBtn.textContent = "Send to Anki";
+      ankiSyncStatus.textContent = "Anki: Pending";
+      ankiSyncStatus.className = "sync-status-label pending";
+      break;
+    case "syncing":
+      syncAnkiBtn.disabled = true;
+      syncAnkiBtn.textContent = "Sending…";
+      ankiSyncStatus.textContent = "Anki: Syncing…";
+      ankiSyncStatus.className = "sync-status-label syncing";
+      break;
+    case "synced":
+      syncAnkiBtn.disabled = true;
+      syncAnkiBtn.textContent = "Sent to Anki";
+      ankiSyncStatus.textContent = "Anki: Synced";
+      ankiSyncStatus.className = "sync-status-label synced";
+      break;
+    case "failed":
+      syncAnkiBtn.disabled = false;
+      syncAnkiBtn.textContent = "Retry Send to Anki";
+      ankiSyncStatus.textContent = "Anki: Failed — retry";
+      ankiSyncStatus.className = "sync-status-label failed";
+      break;
+    default:
+      syncAnkiBtn.disabled = true;
+      syncAnkiBtn.textContent = "Send to Anki";
+      ankiSyncStatus.textContent = ankiConnected ? "Anki: Ready" : "Anki: Not connected";
+      ankiSyncStatus.className = "sync-status-label";
+  }
+}
+
+async function loadDecks() {
+  try {
+    const res = await fetch(API_ANKI_DECKS_URL);
+    const data = await res.json().catch(() => ({}));
+    ankiConnected = Boolean(data.connected);
+    const decks = Array.isArray(data.decks) && data.decks.length ? data.decks : ["Default"];
+
+    if (fieldDeckSelect) {
+      const currentSelected = fieldDeckSelect.value;
+      fieldDeckSelect.replaceChildren();
+      decks.forEach(deck => {
+        const opt = document.createElement("option");
+        opt.value = deck;
+        opt.textContent = deck;
+        fieldDeckSelect.append(opt);
+      });
+
+      // Restore last used deck if available
+      let lastDeck = "";
+      try {
+        if (typeof chrome !== "undefined" && chrome.storage?.local) {
+          const stored = await chrome.storage.local.get("last_used_deck");
+          lastDeck = stored?.last_used_deck;
+        } else if (typeof localStorage !== "undefined") {
+          lastDeck = localStorage.getItem("last_used_deck");
+        }
+      } catch (_) {}
+
+      const targetDeck = currentSelected || lastDeck || "Default";
+      if (decks.includes(targetDeck)) {
+        fieldDeckSelect.value = targetDeck;
+      }
+      if (fieldDeckName) fieldDeckName.value = fieldDeckSelect.value;
+    }
+  } catch (_) {
+    ankiConnected = false;
+  }
+}
+
+if (fieldDeckSelect) {
+  fieldDeckSelect.addEventListener("change", () => {
+    const val = fieldDeckSelect.value;
+    if (fieldDeckName) fieldDeckName.value = val;
+    try {
+      if (typeof chrome !== "undefined" && chrome.storage?.local) {
+        chrome.storage.local.set({last_used_deck: val});
+      } else if (typeof localStorage !== "undefined") {
+        localStorage.setItem("last_used_deck", val);
+      }
+    } catch (_) {}
+  });
+}
 
 function updateSessionCounter() {
   if (sessionCountEl) {
     sessionCountEl.textContent = `Cards this session: ${sessionCardCount}`;
   }
+}
+
+function formatErrorMessage(error, defaultMsg = "Backend unavailable.") {
+  if (!error) return defaultMsg;
+  if (error.message === "Failed to fetch" || error.name === "TypeError") {
+    return "Cannot connect to backend. Ensure FastAPI server is running on http://127.0.0.1:8000";
+  }
+  return error.message || defaultMsg;
 }
 
 function setStatus(message, isError = false) {
@@ -143,7 +260,10 @@ async function identify(text) {
     if (cardEditor) {
       cardEditor.hidden = false;
       if (fieldCardId) fieldCardId.value = body.id || "";
-      if (fieldDeckName) fieldDeckName.value = body.deck_name || "Default";
+      if (fieldDeckSelect && body.deck_name) {
+        fieldDeckSelect.value = body.deck_name;
+      }
+      if (fieldDeckName) fieldDeckName.value = (fieldDeckSelect && fieldDeckSelect.value) || body.deck_name || "Default";
       if (fieldSourceText) fieldSourceText.value = body.source_text || "";
       if (fieldDeinflectedText) fieldDeinflectedText.value = body.deinflected_text || "";
       if (fieldExpression) fieldExpression.value = body.expression || "";
@@ -156,6 +276,19 @@ async function identify(text) {
       if (fieldAudio) fieldAudio.value = body.audio || "";
       if (fieldTags) fieldTags.value = body.tags || "";
       if (fieldNotes) fieldNotes.value = body.notes || "";
+
+      // Sync state update
+      if (body.id) {
+        if (body.sync_status === "synced") {
+          updateSyncUI("synced");
+        } else if (body.sync_status === "failed") {
+          updateSyncUI("failed", body.sync_error);
+        } else {
+          updateSyncUI("pending");
+        }
+      } else {
+        updateSyncUI(ankiConnected ? "ready" : "not_connected");
+      }
     }
 
     if (saveBadge) {
@@ -175,7 +308,7 @@ async function identify(text) {
   } catch (error) {
     if (requestId !== currentCaptureId) return;
     if (saveBadge) saveBadge.hidden = true;
-    setStatus(error.message || "Backend unavailable.", true);
+    setStatus(formatErrorMessage(error), true);
   }
 }
 
@@ -202,12 +335,13 @@ if (cardEditor) {
     saveCardBtn.disabled = true;
     saveCardBtn.textContent = "Saving…";
 
+    const targetDeck = (fieldDeckSelect && fieldDeckSelect.value.trim()) || (fieldDeckName && fieldDeckName.value.trim()) || "Default";
     const payload = {
       id: fieldCardId && fieldCardId.value ? parseInt(fieldCardId.value, 10) : null,
       expression: expr,
       reading: fieldReading ? fieldReading.value.trim() : "",
       meaning: fieldMeaning ? fieldMeaning.value.trim() : "",
-      deck_name: (fieldDeckName && fieldDeckName.value.trim()) || "Default",
+      deck_name: targetDeck,
       hint: fieldHint ? fieldHint.value.trim() : "",
       example_sentence: fieldExampleSentence ? fieldExampleSentence.value.trim() : "",
       example_translation: fieldExampleTranslation ? fieldExampleTranslation.value.trim() : "",
@@ -234,6 +368,12 @@ if (cardEditor) {
       if (expression) expression.textContent = body.expression || expr;
       if (reading) reading.textContent = body.reading || "";
 
+      if (body.sync_status === "synced") {
+        updateSyncUI("synced");
+      } else {
+        updateSyncUI("pending");
+      }
+
       if (saveBadge) {
         if (body.is_duplicate) {
           saveBadge.textContent = "ALREADY SAVED";
@@ -252,13 +392,57 @@ if (cardEditor) {
         }
       }
     } catch (error) {
-      setStatus(`Save failed: ${error.message}`, true);
+      setStatus(`Save failed: ${formatErrorMessage(error)}`, true);
     } finally {
       saveCardBtn.disabled = false;
       saveCardBtn.textContent = "Save Card";
     }
   });
 }
+
+async function triggerAnkiSync() {
+  const cardId = fieldCardId && fieldCardId.value ? parseInt(fieldCardId.value, 10) : null;
+  if (!cardId) {
+    setStatus("Save card before sending to Anki.", true);
+    return;
+  }
+
+  updateSyncUI("syncing");
+  try {
+    const response = await fetch(API_CARD_SYNC_URL(cardId), {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok || body.sync_status === "failed") {
+      const errMsg = body.error || body.detail || "Sync failed";
+      updateSyncUI("failed", errMsg);
+      setStatus(`Anki sync failed: ${errMsg}`, true);
+      return;
+    }
+
+    updateSyncUI("synced");
+    setStatus("Card sent to Anki.");
+  } catch (error) {
+    const msg = formatErrorMessage(error);
+    updateSyncUI("failed", msg);
+    setStatus(`Anki sync failed: ${msg}`, true);
+  }
+}
+
+if (syncAnkiBtn) {
+  syncAnkiBtn.addEventListener("click", triggerAnkiSync);
+}
+
+if (ankiSyncStatus) {
+  ankiSyncStatus.addEventListener("click", () => {
+    if (ankiSyncStatus.classList.contains("failed")) {
+      triggerAnkiSync();
+    }
+  });
+}
+
+loadDecks().catch(() => {});
 
 toggle.addEventListener("click", () => {
   setMiningMode(!miningMode).catch(error => {

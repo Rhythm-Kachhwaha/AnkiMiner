@@ -59,6 +59,8 @@ class CaptureResponse(BaseModel):
     dictionary_error: Optional[str] = None
     deck_name: str = "Default"
     status: str = "draft"
+    sync_status: str = "pending"
+    anki_note_id: Optional[int] = None
     is_duplicate: bool = False
     is_new: bool = False
     is_updated: bool = False
@@ -107,8 +109,33 @@ class SaveCardResponse(BaseModel):
     deinflected_text: str = ""
     deck_name: str = "Default"
     status: str = "saved"
+    sync_status: str = "pending"
+    anki_note_id: Optional[int] = None
+    sync_error: str = ""
+    synced_at: Optional[str] = None
     is_duplicate: bool = False
     is_new: bool = True
     is_updated: bool = False
     created_at: str
     updated_at: str
+
+
+class AnkiStatusResponse(BaseModel):
+    connected: bool
+    version: Optional[int | str] = None
+    error: Optional[str] = None
+
+
+class AnkiDecksResponse(BaseModel):
+    decks: list[str] = ["Default"]
+    connected: bool = True
+
+
+class SyncCardResponse(BaseModel):
+    id: int
+    sync_status: str
+    anki_note_id: Optional[int] = None
+    deck_name: str = "Default"
+    error: Optional[str] = None
+    synced_at: Optional[str] = None
+
