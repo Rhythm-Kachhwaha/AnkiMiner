@@ -4,29 +4,64 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>AnkiMiner</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&family=Noto+Serif+JP:wght@400;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="sidepanel.css">
 </head>
 <body>
   <main class="panel">
-    <header>
-      <span class="eyebrow">ANKIMINER</span>
-      <button id="mining-toggle" type="button" aria-pressed="false">Start mining</button>
+    <header class="panel-header">
+      <div class="brand">
+        <span class="eyebrow">ANKIMINER</span>
+      </div>
+      <div class="connection-indicators" role="status" aria-label="Service connection status">
+        <span id="indicator-yomitan" class="indicator-pill" title="Yomitan: Ready" aria-label="Yomitan status">
+          <span class="indicator-dot"></span>
+          <span class="indicator-label">Yomitan</span>
+        </span>
+        <span id="indicator-anki" class="indicator-pill" title="Anki: Checking…" aria-label="Anki status">
+          <span class="indicator-dot"></span>
+          <span class="indicator-label">Anki</span>
+        </span>
+      </div>
     </header>
-    <div class="session-bar">
-      <p id="mode" class="status">Mining mode is off.</p>
+
+    <div class="mining-bar">
+      <div class="mining-controls">
+        <button id="mining-toggle" type="button" aria-pressed="false" class="btn-mining">Start mining</button>
+        <p id="mode" class="status-mode">Mining mode is off.</p>
+      </div>
       <span id="session-count" class="session-counter">Cards this session: 0</span>
     </div>
-    <section aria-live="polite">
-      <div class="capture-header">
-        <p id="capture-status" class="status">Select Japanese text after starting mining.</p>
-        <span id="save-badge" class="badge" hidden></span>
+
+    <div class="capture-banner">
+      <p id="capture-status" class="status">Select Japanese text after starting mining.</p>
+      <span id="save-badge" class="badge" hidden></span>
+    </div>
+
+    <!-- Prominent Captured Japanese Word Display -->
+    <section id="captured-word-section" class="captured-word-hero" aria-label="Captured Japanese Word">
+      <div class="word-display-card">
+        <h1 id="expression" class="hero-expression">—</h1>
+        <p id="reading" class="hero-reading"></p>
       </div>
+    </section>
 
-      <!-- Hidden reference elements for compatibility with existing tests checking textContent -->
-      <h1 id="expression" class="visually-hidden">—</h1>
-      <p id="reading" class="reading visually-hidden"></p>
+    <!-- Dictionary Information Section -->
+    <section id="dictionary-section" class="dictionary-section" aria-live="polite">
+      <div class="section-header">
+        <span class="section-title">DICTIONARY</span>
+      </div>
+      <div id="meanings" class="details"></div>
+      <div id="examples" class="details"></div>
+    </section>
 
-      <!-- Card Editor Form -->
+    <!-- Card Editor Form -->
+    <section id="card-editor-section" class="card-editor-section">
+      <div class="section-header">
+        <span class="section-title">CARD</span>
+      </div>
       <form id="card-editor" class="card-editor" hidden>
         <input type="hidden" id="field-card-id" name="id">
         <input type="hidden" id="field-deck-name" name="deck_name" value="Default">
@@ -34,25 +69,36 @@
         <input type="hidden" id="field-deinflected-text" name="deinflected_text">
 
         <div class="form-group">
-          <label for="field-deck-select">Deck</label>
-          <select id="field-deck-select" name="deck_select">
-            <option value="Default">Default</option>
-          </select>
-        </div>
-
-        <div class="form-group">
           <label for="field-expression">Expression</label>
-          <input type="text" id="field-expression" name="expression" required autocomplete="off">
+          <input type="text" id="field-expression" name="expression" required autocomplete="off" class="japanese-input">
         </div>
 
         <div class="form-group">
           <label for="field-reading">Reading</label>
-          <input type="text" id="field-reading" name="reading" autocomplete="off">
+          <input type="text" id="field-reading" name="reading" autocomplete="off" class="japanese-input">
         </div>
 
         <div class="form-group">
           <label for="field-meaning">Meaning</label>
           <textarea id="field-meaning" name="meaning" rows="2"></textarea>
+        </div>
+
+        <div class="form-row-compact">
+          <div class="form-group font-selector-group">
+            <label for="field-font-select">Font</label>
+            <select id="field-font-select" name="font_select">
+              <option value="Noto Sans JP">Noto Sans Japanese</option>
+              <option value="Noto Serif JP">Noto Serif Japanese</option>
+              <option value="system-ui">System Default</option>
+            </select>
+          </div>
+
+          <div class="form-group deck-selector-group">
+            <label for="field-deck-select">Deck</label>
+            <select id="field-deck-select" name="deck_select">
+              <option value="Default">Default</option>
+            </select>
+          </div>
         </div>
 
         <div class="optional-toggle-container">
@@ -68,7 +114,7 @@
           </div>
           <div class="form-group">
             <label for="field-example-sentence">Example sentence</label>
-            <textarea id="field-example-sentence" name="example_sentence" rows="2"></textarea>
+            <textarea id="field-example-sentence" name="example_sentence" rows="2" class="japanese-input"></textarea>
           </div>
           <div class="form-group">
             <label for="field-example-translation">Example translation</label>
@@ -100,9 +146,6 @@
           </div>
         </div>
       </form>
-
-      <div id="meanings" class="details"></div>
-      <div id="examples" class="details"></div>
     </section>
   </main>
   <script src="sidepanel.js"></script>

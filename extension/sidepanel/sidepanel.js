@@ -14,11 +14,16 @@ const reading = document.querySelector("#reading");
 const meanings = document.querySelector("#meanings");
 const examples = document.querySelector("#examples");
 
+// Indicators
+const indicatorYomitan = document.querySelector("#indicator-yomitan");
+const indicatorAnki = document.querySelector("#indicator-anki");
+
 // Card Editor elements
 const cardEditor = document.querySelector("#card-editor");
 const fieldCardId = document.querySelector("#field-card-id");
 const fieldDeckName = document.querySelector("#field-deck-name");
 const fieldDeckSelect = document.querySelector("#field-deck-select");
+const fieldFontSelect = document.querySelector("#field-font-select");
 const fieldSourceText = document.querySelector("#field-source-text");
 const fieldDeinflectedText = document.querySelector("#field-deinflected-text");
 const fieldExpression = document.querySelector("#field-expression");
@@ -42,6 +47,12 @@ let currentCaptureId = 0;
 let sessionCardCount = 0;
 let ankiConnected = false;
 
+function setIndicatorStatus(indicatorEl, state, titleText) {
+  if (!indicatorEl) return;
+  indicatorEl.className = `indicator-pill ${state}`;
+  if (titleText) indicatorEl.title = titleText;
+}
+
 function updateSyncUI(state, error = "") {
   if (!ankiSyncStatus || !syncAnkiBtn) return;
   ankiSyncStatus.title = error || "";
@@ -52,51 +63,68 @@ function updateSyncUI(state, error = "") {
       syncAnkiBtn.textContent = "Send to Anki";
       ankiSyncStatus.textContent = "Anki: Ready";
       ankiSyncStatus.className = "sync-status-label";
+      if (typeof setIndicatorStatus === "function") setIndicatorStatus(indicatorAnki, "connected", "Anki: Connected");
       break;
     case "not_connected":
       syncAnkiBtn.disabled = true;
       syncAnkiBtn.textContent = "Send to Anki";
       ankiSyncStatus.textContent = "Anki: Not connected";
       ankiSyncStatus.className = "sync-status-label";
+      if (typeof setIndicatorStatus === "function") setIndicatorStatus(indicatorAnki, "unavailable", "Anki: Not connected");
       break;
     case "pending":
       syncAnkiBtn.disabled = false;
       syncAnkiBtn.textContent = "Send to Anki";
       ankiSyncStatus.textContent = "Anki: Pending";
       ankiSyncStatus.className = "sync-status-label pending";
+      if (typeof setIndicatorStatus === "function") setIndicatorStatus(indicatorAnki, ankiConnected ? "connected" : "unavailable", ankiConnected ? "Anki: Connected" : "Anki: Not connected");
       break;
     case "syncing":
       syncAnkiBtn.disabled = true;
       syncAnkiBtn.textContent = "Sending…";
       ankiSyncStatus.textContent = "Anki: Syncing…";
       ankiSyncStatus.className = "sync-status-label syncing";
+      if (typeof setIndicatorStatus === "function") setIndicatorStatus(indicatorAnki, "checking", "Anki: Syncing…");
       break;
     case "synced":
       syncAnkiBtn.disabled = true;
       syncAnkiBtn.textContent = "Sent to Anki";
       ankiSyncStatus.textContent = "Anki: Synced";
       ankiSyncStatus.className = "sync-status-label synced";
+      if (typeof setIndicatorStatus === "function") setIndicatorStatus(indicatorAnki, "connected", "Anki: Connected");
       break;
     case "failed":
       syncAnkiBtn.disabled = false;
       syncAnkiBtn.textContent = "Retry Send to Anki";
       ankiSyncStatus.textContent = "Anki: Failed — retry";
       ankiSyncStatus.className = "sync-status-label failed";
+      if (typeof setIndicatorStatus === "function") setIndicatorStatus(indicatorAnki, "unavailable", error ? `Anki error: ${error}` : "Anki: Failed");
       break;
     default:
       syncAnkiBtn.disabled = true;
       syncAnkiBtn.textContent = "Send to Anki";
       ankiSyncStatus.textContent = ankiConnected ? "Anki: Ready" : "Anki: Not connected";
       ankiSyncStatus.className = "sync-status-label";
+      if (typeof setIndicatorStatus === "function") setIndicatorStatus(indicatorAnki, ankiConnected ? "connected" : "unavailable", ankiConnected ? "Anki: Connected" : "Anki: Not connected");
   }
 }
 
 async function loadDecks() {
   try {
+    setIndicatorStatus(indicatorAnki, "checking", "Anki: Checking connection…");
     const res = await fetch(API_ANKI_DECKS_URL);
     const data = await res.json().catch(() => ({}));
     ankiConnected = Boolean(data.connected);
     const decks = Array.isArray(data.decks) && data.decks.length ? data.decks : ["Default"];
+
+    if (ankiConnected) {
+      setIndicatorStatus(indicatorAnki, "connected", "Anki: Connected");
+      if (ankiSyncStatus && ankiSyncStatus.textContent === "Anki: Not connected") {
+        ankiSyncStatus.textContent = "Anki: Ready";
+      }
+    } else {
+      setIndicatorStatus(indicatorAnki, "unavailable", "Anki: Not connected");
+    }
 
     if (fieldDeckSelect) {
       const currentSelected = fieldDeckSelect.value;
@@ -127,7 +155,51 @@ async function loadDecks() {
     }
   } catch (_) {
     ankiConnected = false;
+    setIndicatorStatus(indicatorAnki, "unavailable", "Anki: Not connected");
   }
+}
+
+// Japanese Font Selection handling
+function applyJapaneseFont(fontFamily) {
+  let fontStack = "var(--font-noto-sans)";
+  if (fontFamily === "Noto Serif JP") {
+    fontStack = "var(--font-noto-serif)";
+  } else if (fontFamily === "system-ui") {
+    fontStack = "var(--font-system)";
+  }
+  document.documentElement.style.setProperty("--japanese-font", fontStack);
+}
+
+async function loadFontPreference() {
+  let savedFont = "Noto Sans JP";
+  try {
+    if (typeof chrome !== "undefined" && chrome.storage?.local) {
+      const stored = await chrome.storage.local.get("preferred_japanese_font");
+      if (stored?.preferred_japanese_font) savedFont = stored.preferred_japanese_font;
+    } else if (typeof localStorage !== "undefined") {
+      const stored = localStorage.getItem("preferred_japanese_font");
+      if (stored) savedFont = stored;
+    }
+  } catch (_) {}
+
+  if (fieldFontSelect) {
+    fieldFontSelect.value = savedFont;
+  }
+  applyJapaneseFont(savedFont);
+}
+
+if (fieldFontSelect) {
+  fieldFontSelect.addEventListener("change", () => {
+    const val = fieldFontSelect.value;
+    applyJapaneseFont(val);
+    try {
+      if (typeof chrome !== "undefined" && chrome.storage?.local) {
+        chrome.storage.local.set({preferred_japanese_font: val});
+      } else if (typeof localStorage !== "undefined") {
+        localStorage.setItem("preferred_japanese_font", val);
+      }
+    } catch (_) {}
+  });
 }
 
 if (fieldDeckSelect) {
@@ -141,6 +213,19 @@ if (fieldDeckSelect) {
         localStorage.setItem("last_used_deck", val);
       }
     } catch (_) {}
+  });
+}
+
+// Keep live hero display synced as user edits expression or reading
+if (fieldExpression) {
+  fieldExpression.addEventListener("input", () => {
+    if (expression) expression.textContent = fieldExpression.value || "—";
+  });
+}
+
+if (fieldReading) {
+  fieldReading.addEventListener("input", () => {
+    if (reading) reading.textContent = fieldReading.value || "";
   });
 }
 
@@ -185,6 +270,7 @@ function add(parent, tag, text, className = "") {
   element.textContent = text;
   if (className) element.className = className;
   parent.append(element);
+  return element;
 }
 
 function renderDetails(body) {
@@ -193,10 +279,25 @@ function renderDetails(body) {
   for (const entry of body.entries || []) {
     const block = document.createElement("article");
     block.className = "dictionary-entry";
-    add(block, "h2", entry.dictionary);
-    if (entry.parts_of_speech?.length) {
-      add(block, "p", entry.parts_of_speech.join(" · "), "meta");
+
+    const titleH2 = add(block, "h2", entry.dictionary);
+    if (entry.is_primary) {
+      const primaryBadge = document.createElement("span");
+      primaryBadge.className = "badge";
+      primaryBadge.textContent = "Primary";
+      primaryBadge.style.fontSize = "10px";
+      titleH2.append(primaryBadge);
     }
+
+    if (entry.parts_of_speech?.length) {
+      const metaContainer = document.createElement("div");
+      metaContainer.className = "meta";
+      entry.parts_of_speech.forEach(pos => {
+        add(metaContainer, "span", pos, "pos-tag");
+      });
+      block.append(metaContainer);
+    }
+
     entry.senses.forEach((sense, index) => {
       const section = document.createElement("section");
       section.className = "sense";
@@ -210,8 +311,11 @@ function renderDetails(body) {
       }
       sense.notes?.forEach(note => add(section, "p", note, "note"));
       sense.examples?.forEach(example => {
-        add(section, "p", example.japanese, "example");
-        if (example.translation) add(section, "p", example.translation, "translation");
+        const egCard = document.createElement("div");
+        egCard.className = "example-card";
+        add(egCard, "p", example.japanese, "example");
+        if (example.translation) add(egCard, "p", example.translation, "translation");
+        section.append(egCard);
       });
       block.append(section);
     });
@@ -224,6 +328,7 @@ async function identify(text) {
   if (!capturedText) return;
   const requestId = ++currentCaptureId;
   setStatus("Identifying selection…");
+  setIndicatorStatus(indicatorYomitan, "checking", "Yomitan: Identifying…");
   if (saveBadge) {
     saveBadge.hidden = true;
     saveBadge.className = "badge";
@@ -248,10 +353,13 @@ async function identify(text) {
         : response.status === 422
           ? "Invalid capture request"
           : "Backend request failed";
+      setIndicatorStatus(indicatorYomitan, "unavailable", "Yomitan: Unavailable");
       throw new Error(`${cause}: ${body.detail || response.statusText}`);
     }
 
-    // Populate reference elements
+    setIndicatorStatus(indicatorYomitan, "connected", "Yomitan: Connected");
+
+    // Populate prominent hero elements
     expression.textContent = body.expression || "—";
     reading.textContent = body.reading || "";
     renderDetails(body);
@@ -308,6 +416,7 @@ async function identify(text) {
   } catch (error) {
     if (requestId !== currentCaptureId) return;
     if (saveBadge) saveBadge.hidden = true;
+    setIndicatorStatus(indicatorYomitan, "unavailable", "Yomitan: Unavailable");
     setStatus(formatErrorMessage(error), true);
   }
 }
@@ -442,7 +551,55 @@ if (ankiSyncStatus) {
   });
 }
 
+// Keyboard shortcuts
+document.addEventListener("keydown", event => {
+  const isMac = navigator.platform.toUpperCase().indexOf("MAC") >= 0;
+  const modKey = isMac ? event.metaKey : event.ctrlKey;
+
+  if (modKey && event.key === "Enter") {
+    event.preventDefault();
+    if (cardEditor && !cardEditor.hidden) {
+      cardEditor.requestSubmit();
+    }
+    return;
+  }
+
+  if (modKey && event.key.toLowerCase() === "k") {
+    event.preventDefault();
+    if (fieldExpression) {
+      fieldExpression.focus();
+      fieldExpression.select();
+    }
+    return;
+  }
+
+  if (modKey && event.shiftKey && event.key.toLowerCase() === "m") {
+    event.preventDefault();
+    if (fieldMeaning) {
+      fieldMeaning.focus();
+      fieldMeaning.select();
+    }
+    return;
+  }
+
+  if (event.key === "Escape") {
+    if (optionalFields && !optionalFields.hidden) {
+      optionalFields.hidden = true;
+      if (toggleOptionalBtn) {
+        toggleOptionalBtn.setAttribute("aria-expanded", "false");
+        toggleOptionalBtn.textContent = "+ Optional fields";
+        toggleOptionalBtn.focus();
+      }
+    }
+  }
+});
+
+// Initialization
+loadFontPreference().catch(() => {});
 loadDecks().catch(() => {});
+
+// Default Yomitan indicator to ready state
+setIndicatorStatus(indicatorYomitan, "connected", "Yomitan: Ready");
 
 toggle.addEventListener("click", () => {
   setMiningMode(!miningMode).catch(error => {

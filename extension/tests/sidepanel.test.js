@@ -7,18 +7,27 @@ const htmlPath = fs.existsSync("extension/sidepanel/sidepanel.html")
   : path.resolve(__dirname, "../sidepanel/sidepanel.html");
 const html = fs.readFileSync(htmlPath, "utf8");
 
-// Verify required Phase 4 elements exist in the DOM
+// Verify required Phase 4 & 5 elements exist in the DOM
 assert.ok(html.includes('id="field-deck-select"'), "Deck selector select must exist");
 assert.ok(html.includes('id="sync-anki-btn"'), "Send to Anki button must exist");
 assert.ok(html.includes('id="anki-sync-status"'), "Anki sync status label must exist");
 assert.ok(html.includes('id="save-card-btn"'), "Save Card button must exist");
 assert.ok(html.includes('id="field-deck-name"'), "Hidden deck name fallback input must exist");
 
+// Phase 5 elements: Connection indicators, Japanese typography selector, Hero word display
+assert.ok(html.includes('id="indicator-yomitan"'), "Yomitan connection indicator must exist");
+assert.ok(html.includes('id="indicator-anki"'), "Anki connection indicator must exist");
+assert.ok(html.includes('id="expression"'), "Prominent expression display element must exist");
+assert.ok(html.includes('id="reading"'), "Prominent reading display element must exist");
+assert.ok(html.includes('id="field-font-select"'), "Japanese font selector must exist");
+assert.ok(html.includes('value="Noto Sans JP"'), "Noto Sans JP font option must exist");
+assert.ok(html.includes('Noto Sans Japanese'), "Noto Sans Japanese label must exist");
+
 // Verify default state
 assert.ok(html.includes('<option value="Default">Default</option>'), "Default deck option must exist");
 assert.ok(html.includes('id="sync-anki-btn" class="btn-sync" disabled'), "Sync button should start disabled");
 
-console.log("sidepanel HTML tests passed");
+console.log("sidepanel HTML tests passed (Phase 4 + Phase 5 DOM verified)");
 
 // Verify updateSyncUI state machine
 const vm = require("node:vm");

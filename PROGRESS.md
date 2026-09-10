@@ -2,10 +2,10 @@
 
 ## Current status
 
-Phase 4 (ANKICONNECT SYNCHRONIZATION + DECK CONFIGURATION) is fully implemented and independently verified by the Phase 4 verification agent (2026-09-10).
-All automated backend tests pass (65/65 pytest tests — 5 new regression tests added during verification).
-Extension unit, DOM contract, and state machine tests pass (2/2 node tests).
-All live AnkiConnect integration checks pass against real Anki at `http://127.0.0.1:8765` across both Japanese mining and standard Basic note models.
+Phase 5 (SIDEBAR 2.0 + JAPANESE TYPOGRAPHY + UX POLISH) is fully implemented and verified (2026-09-10).
+All automated backend tests pass (65/65 pytest tests).
+Extension unit, DOM contract, and state machine tests pass (2/2 node tests, with Phase 5 DOM assertions added).
+Live headless Chrome CDP automation verifies real browser UI rendering, Japanese font selection, prominent word hero display, live editing sync, and dynamic term capture without page reload across test words (映画, 日, 日にち, 日本, 食べる, 見た).
 
 ## Implemented
 
@@ -83,45 +83,55 @@ All live AnkiConnect integration checks pass against real Anki at `http://127.0.
   - Anki sync status feedback (`#anki-sync-status`) displaying `Anki: Ready`, `Anki: Not connected`, `Anki: Pending`, `Anki: Syncing…`, `Anki: Synced`, `Anki: Failed — retry`.
   - Retry on failed status label click.
 
+### Phase 5 (Sidebar 2.0 + Japanese Typography + UX Polish)
+
+- **Header & Compact Connection Indicators**:
+  - Top header row with brand eyebrow `ANKIMINER` and compact status pills: `#indicator-yomitan` and `#indicator-anki`.
+  - Status indicators display accessible dot indicators and text labels with states: `connected` (green `#5db872`), `checking` (amber `#e8a55a`), `unavailable` (muted `#6c6a64`).
+  - Anki indicator dynamically updates from `loadDecks()` and `updateSyncUI()`.
+  - Yomitan indicator dynamically reflects startup readiness, in-flight capture, success, or 503 unavailable status.
+- **Prominent Captured Japanese Word Hero**:
+  - Unhidden and featured `#expression` and `#reading` inside a dedicated hero card (`.captured-word-hero`).
+  - Expression displayed in prominent 32px font (`--japanese-font`, bold, `#faf9f5`) with reading displayed right below in 15px kana (`#e8a55a`).
+  - Live two-way synchronization: typing in form inputs (`#field-expression`, `#field-reading`) dynamically updates the hero display in real time.
+- **Japanese Font Selection (Presentation Preference)**:
+  - Font selector (`#field-font-select`) in Card Editor with options: `Noto Sans Japanese` (`Noto Sans JP`), `Noto Serif Japanese` (`Noto Serif JP`), `System Default` (`system-ui`).
+  - Switches CSS custom property `--japanese-font` immediately, updating hero expression, reading, editor fields, and dictionary Japanese examples.
+  - Presentation only: zero modification to raw expression/reading strings in Yomitan, SQLite, or Anki payloads.
+  - Restores saved font preference from `chrome.storage.local` or `localStorage` (`preferred_japanese_font`).
+- **Dictionary Layout & Jitendex Typography**:
+  - Enhanced Jitendex dictionary display with `DICTIONARY` section title, subtle entry card container (`#1f1e1b`, `1px solid #3d3a35`), clean POS tag badges (`.pos-tag`), structured senses, and coral-accented example cards (`.example-card`).
+- **Card Editor & Deck Actions UX**:
+  - Clear visual hierarchy for `CARD` section with core fields grouped at top.
+  - Compact two-column row for Font and Deck selectors (`.form-row-compact`).
+  - Progressive disclosure for optional fields with keyboard shortcut support (`Esc` closes optional fields).
+  - Keyboard shortcuts: `Ctrl/Cmd+Enter` submits/saves card, `Ctrl/Cmd+K` focuses expression, `Ctrl/Cmd+Shift+M` focuses meaning, `Esc` closes optional fields.
+  - Responsive styling ensuring zero horizontal overflow down to 320px panel width.
+
 ## Verified
 
-- **Automated backend test suite (65/65 passed)** — run 2026-09-10 by Phase 4 verification agent:
-  - `test_anki_connect.py` (17 tests — 5 regression tests added during verification):
-    - version request, list decks, create deck.
-    - connection refused, timeout, malformed JSON, action error.
-    - candidate search, safe query escaping.
-    - empty expression guard: `find_existing_note` with empty expression returns `None` without issuing a broad deck query.
-    - deterministic Basic and Japanese model field mappings, note creation.
-    - **new**: Basic model bracketed reading duplicate detection (`Front: "映画 [えいが]"` accurately matched).
-    - **new**: HTML-formatted field values stripping and matching.
-    - **new**: Homonym differentiation: same expression with different reading is rejected as duplicate candidate.
-    - **new**: Deck filtering: note with matching expression in a different deck is skipped.
-  - `test_anki_loopback_http.py` (6 tests):
-    - live HTTP loopback server testing real socket requests, JSON-RPC, error handling, connection refused.
-  - `test_sync_lifecycle.py` (9 tests):
-    - schema migration on existing DBs preserving rows and defaulting `sync_status = 'pending'`.
-    - repository state transitions (`mark_syncing`, `mark_synced`, `mark_failed`).
-    - local save succeeding independently with Anki offline.
-    - sync success marking card synced and populating `anki_note_id` and `synced_at`.
-    - sync failure preserving local SQLite card and marking failed.
-    - duplicate Anki note detection linking existing note ID without calling `add_note`.
-    - already-synced cards not duplicated.
-    - safe retry after failure.
-    - API endpoints (`status`, `decks`, `sync`, 404 validation).
-  - All 33 previous tests (`test_card_editor.py`, `test_card_repository.py`, `test_capture_integration.py`, `test_capture_route.py`, `test_dictionary.py`, `test_yomitan.py`) pass without regressions.
-- **Automated extension unit & contract tests (2/2 passed)**:
-  - `capture-utils.test.js`: boundary and script tests pass (supports execution from both project root and extension dir).
-  - `sidepanel.test.js`: deck selector, sync button, and sync status DOM contract tests pass; `updateSyncUI` state machine transitions verified (`ready`, `pending`, `syncing`, `synced`, `failed`).
-- **Live AnkiConnect integration verification against real Anki (`http://127.0.0.1:8765`)** — run 2026-09-10 by Phase 4 verification agent:
-  - Connection verified: `connected=True, version=6`.
-  - Deck retrieval: `['Default', 'Kaishi 1.5k', 'n3 mining']`.
-  - Note model resolved: `japanese mining`, fields `['Front', 'Back', 'word', 'Audio', 'Image', 'Source', 'URL']`.
-  - Local save: test card `AnkiMiner検証Live` saved to SQLite with `sync_status='pending'`.
-  - Explicit sync: note created with Anki Note ID `1789045826061`, SQLite updated to `sync_status='synced'`.
-  - Second sync: no duplicate created; existing `anki_note_id` returned.
-  - DB reset duplicate prevention: card deleted from SQLite, re-saved locally, synced — `find_existing_note` located the existing Anki note and linked it without creating a duplicate.
-  - Cleanup verified: temporary note deleted from Anki, temporary SQLite database removed.
-  - Standard `Basic` model live verification: card created with `ANKI_NOTE_MODEL="Basic"`, note created with `Front: "AnkiMinerBasicTest [ankiminerbasictest]"`, SQLite reset, re-mined card synced — duplicate detection successfully discovered and linked existing note ID `1789045861040` without duplicate creation; test note deleted from Anki afterward.
+- **Automated backend test suite (65/65 passed)** — run 2026-09-10:
+  - All 65 tests in `backend/tests/` passed with 0 regressions.
+- **Automated extension unit & contract tests (2/2 passed)** — run 2026-09-10:
+  - `capture-utils.test.js`: boundary and script tests pass.
+  - `sidepanel.test.js`: deck selector, sync button, sync status, font selector, connection indicators, and hero display DOM contracts pass; `updateSyncUI` state machine transitions verified (`ready`, `pending`, `syncing`, `synced`, `failed`).
+- **Live Chromium / Chrome CDP End-to-End Browser Automation**:
+  - Header indicators verified: `ANKIMINER`, `indicator-yomitan` (`connected`), `indicator-anki` (`checking` / `connected`).
+  - Mining toggle verified: toggles between `Start mining` and `Stop mining`, updates mode text.
+  - Captured Japanese word hero verified with `映画`: large expression `映画` (32px), reading `えいが` (15px).
+  - Jitendex dictionary verified: dictionary card with glosses (`movie`, `film`, `motion picture`) and styled example card (`その映画をもう一度見たいな。` / `I want to see the movie again.`).
+  - Font selection verified: changed to `Noto Serif JP` (`--japanese-font: var(--font-noto-serif)`), verified immediate CSS variable update and screenshot capture; switched back to `Noto Sans JP`.
+  - Raw expression integrity verified: remained exact string `映画` with zero HTML injection.
+  - Live hero syncing verified: typing `映画 (Edited)` into input immediately updated the hero expression.
+  - Meaning edit & optional fields toggle verified: edited meaning text, expanded optional fields (`aria-expanded="true"`).
+  - Save Card verified: saved card updated `#save-badge` to `[SAVED]`.
+  - Dynamic capture without page reload verified across 5 consecutive Japanese terms:
+    - `日` -> hero: `日`, reading: `ひ`, meaning: `day, sun, sunshine`
+    - `日にち` -> hero: `日にち`, reading: `ひにち`, meaning: `date / schedule`
+    - `日本` -> hero: `日本`, reading: `にほん`, meaning: `Japan`
+    - `食べる` -> hero: `食べる`, reading: `たべる`, meaning: `to eat`
+    - `見た` -> hero: `見る`, reading: `みた` (deinflected)
+  - Visual artifacts captured and confirmed: `01_initial_sidepanel.png`, `02_captured_eiga.png`, `03_font_serif.png`, `04_optional_fields_expanded.png`, `05_dynamic_capture_last_word.png`.
 
 ## Bugs fixed during verification
 
@@ -130,13 +140,15 @@ All live AnkiConnect integration checks pass against real Anki at `http://127.0.
 3. **`find_existing_note` empty expression guard**: When expression reduced to empty after sanitization, the query fell through to `deck:"<deck>"`, returning all notes in the deck. Added immediate `return None` guard.
 4. **Extension test runner path resolution**: `capture-utils.test.js` and `sidepanel.test.js` failed with `ENOENT` when run from `extension/` directory because of hardcoded `extension/...` paths. Updated to use `path.resolve(__dirname, ...)`.
 5. **Extension backend connection diagnostics (`Failed to fetch`)**: When the local FastAPI backend was not running on `http://127.0.0.1:8000`, the browser threw `TypeError: Failed to fetch`. `sidepanel.js` rendered this raw browser message without explanation. Added `formatErrorMessage` in `sidepanel.js` mapping network failures to clear, actionable guidance (`Cannot connect to backend. Ensure FastAPI server is running on http://127.0.0.1:8000`). Started the FastAPI backend server daemon process (`python -m uvicorn app.main:app --host 127.0.0.1 --port 8000`), restoring live capture, SQLite persistence, and Anki connectivity in the extension.
+6. **`updateSyncUI` vm context isolation in tests**: `sidepanel.test.js` evaluates the slice of `updateSyncUI` in an isolated Node `vm` context where external helper functions were undefined. Added `typeof setIndicatorStatus === 'function'` guards ensuring both browser and test vm execution succeed without ReferenceErrors.
 
 ## Known issues
 
-- None. Phase 4 is complete and fully verified.
+- None. Phase 5 is complete and fully verified.
 
 ## Next task
 
-Phase 4 complete and independently verified. Await user instructions for future phases.
+Phase 5 complete and verified. Await user instructions for Phase 6.
+
 
 
