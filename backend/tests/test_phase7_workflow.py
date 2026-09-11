@@ -35,7 +35,7 @@ class Phase7WorkflowTests(unittest.TestCase):
             os.environ.pop("ANKIMINER_DB_PATH", None)
         self.temp_dir.cleanup()
 
-    @patch("app.services.card_service.YomitanService")
+    @patch("app.main.YomitanService")
     @patch("app.services.card_service.AnkiConnectService")
     def test_complete_phase7_mining_history_and_card_library_flow(self, mock_anki_cls, mock_yomitan_cls):
         # Setup Yomitan mock

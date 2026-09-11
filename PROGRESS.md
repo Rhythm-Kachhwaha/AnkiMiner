@@ -248,23 +248,48 @@ Live AnkiConnect and live Yomitan verification passed with clean test cleanup.
 
 - None.
 
-## Recent changes (HiAnime + ASBPlayer Subtitle Capture Compatibility)
+## Recent changes (Video Mining Mode — UI Tabs, Clear Controls, YouTube Bridge & Netflix Adapter)
 
 - **Files Changed**:
-  - `extension/manifest.json`: Added `"all_frames": true` and `"match_about_blank": true` to the `content_scripts` declaration.
-  - `extension/tests/capture-frame-verification.test.js`: Added regression and iframe capture contract test verifying manifest properties, top-level site capture (YouTube/Netflix), and dynamic `about:blank` iframe capture (HiAnime + ASBPlayer `asbplayer-ui-frame` `.asbplayer-subtitles`).
+  - `extension/sidepanel/sidepanel.html`: Introduced segmented navigation tabs (`#tab-btn-text`, `#tab-btn-video`) dividing Mining into clean **Text Mining** and **Video Mining** views; decluttered UI by eliminating duplicate headers and tightening sections; added `#clear-subtitles-btn` to clear loaded subtitle files; maintained shared Card Editor, Dictionary view, and Card Library across both modes.
+  - `extension/sidepanel/sidepanel.css`: Added segmented tab bar styles (`.mining-nav-tabs`, `.tab-btn`), tightened vertical padding on `.panel` (`8px 12px 16px`), styled `.video-mining-panel` and `.btn-clear-subtitles` with warm coral accents and dark theme aesthetics.
+  - `extension/sidepanel/sidepanel.js`: Wired tab switching with persistence (`active_mining_tab`); implemented `clearSubtitles()` to send `CLEAR_SUBTITLES` message to active tab, reset status pill, reset timing offset to 0.0s, and clear cue preview; wired `#clear-subtitles-btn` event handler.
+  - `extension/content/video-mining-poc.js`:
+    - Fixed on-video subtitle overlay: overhauled `SubtitleOverlayRenderer` to use viewport-anchored `position: fixed !important` coordinates (`left`, `top = vRect.top + vRect.height * 0.78`, `width`) on `document.body` (or `position: absolute; bottom: 8%` on `document.fullscreenElement`), completely bypassing parent container `overflow: hidden` on YouTube and streaming video players.
+    - Added dynamic position re-measurement inside `renderCue(cue)` and on `window.scroll`, `resize`, and `video.timeupdate`.
+    - Added `CLEAR_SUBTITLES` message handler to clear cues, reset timing offsets, clear overlay, and broadcast null cue.
+    - Integrated `NetflixAdapter` for live subtitle capture and suppression on netflix.com.
+  - `extension/content/adapters/youtube-bridge.js` (NEW): MV3 MAIN-world script running directly in page execution context on `*://*.youtube.com/*` to query `#movie_player` and player responses (`ytInitialPlayerResponse`), posting caption tracks to content scripts via `window.postMessage`.
+  - `extension/content/adapters/youtube-adapter.js`: Added bridge message listener (`ANKIMINER_YT_MAIN`) and bidirectional message protocol to extract Japanese caption tracks reliably from both MAIN world bridge and DOM/script fallbacks.
+  - `extension/content/adapters/netflix-adapter.js` (NEW): Automated Netflix subtitle extractor observing `.player-timedtext` using `MutationObserver`, extracting live Japanese text segments, suppressing native captions via CSS (`opacity: 0 !important`), and emitting cues to overlay.
+  - `extension/manifest.json`: Added `*://*.netflix.com/*` to `host_permissions`; registered `youtube-bridge.js` with `"world": "MAIN"`, `"run_at": "document_start"`; registered `netflix-adapter.js` in `<all_urls>` `content_scripts`.
+  - `extension/tests/netflix-adapter.test.js` (NEW): Unit tests verifying Netflix domain detection, Japanese character detection, timedtext extraction, and `MutationObserver` cue emission and suppression.
+  - `extension/tests/video-mining-integration.test.js`: Added `testClearSubtitles` (verifying `CLEAR_SUBTITLES` message handling, synchronizer reset, overlay clearing) and `testNetflixIntegration` (verifying Netflix observer, suppression CSS, and cue emission).
+  - `extension/tests/sidepanel.test.js`: Added DOM assertions verifying segmented tabs (`#tab-btn-text`, `#tab-btn-video`), tab views (`#text-mining-view`, `#video-mining-view`), and clear button (`#clear-subtitles-btn`).
+
 - **Behavior Delivered**:
-  - Enabled existing AnkiMiner content scripts (`capture-utils.js` and `content.js`) to run inside dynamically generated/about:blank iframes like ASBPlayer's `asbplayer-ui-frame`.
-  - Preserved all existing capture logic, top-level site capture (YouTube, Netflix, general web pages), Yomitan integration, backend API, and database models without modification.
+  1. **Clean Dedicated Video Mining Tab**: Users can switch between Text Mining and Video Mining views using segmented tabs. UI clutter is reduced while card editing, Yomitan enrichment, and Anki syncing remain unified.
+  2. **Subtitle Clearing**: Users can click "Clear" (`#clear-subtitles-btn`) to unload the loaded subtitle file, reset the status pill, reset timing offset to `0.0s`, and instantly hide the video overlay.
+  3. **YouTube Detection via MAIN World Bridge**: Bridges Chrome's isolated world barrier on YouTube to read `#movie_player` caption tracklist and player responses, reliably discovering Japanese caption tracks.
+  4. **Netflix Subtitle Detection**: Employs a non-intrusive `MutationObserver` on `.player-timedtext` to extract live Japanese dialogue, while suppressing Netflix's native overlay using CSS opacity.
+  5. **Reliable On-Video Subtitle Display**: Subtitles from loaded files or native tracks render directly floating above the video using viewport-anchored `position: fixed` coordinates, bypassing container overflow clipping.
+
 - **Verification Run**:
-  - `extension/tests/capture-utils.test.js`: PASSED
+  - `extension/tests/subtitle-parser.test.js`: PASSED
+  - `extension/tests/youtube-adapter.test.js`: PASSED
+  - `extension/tests/netflix-adapter.test.js`: PASSED
+  - `extension/tests/video-mining-poc.test.js`: PASSED
+  - `extension/tests/video-mining-integration.test.js`: PASSED (7/7 suites passed)
   - `extension/tests/sidepanel.test.js`: PASSED
-  - `extension/tests/capture-frame-verification.test.js`: PASSED (verified manifest schema, top-level selection capture, and ASBPlayer iframe selection capture)
-  - `backend/tests` (via `python -m pytest tests`): PASSED (92/92 passed)
+  - `extension/tests/capture-utils.test.js`: PASSED
+  - `extension/tests/capture-frame-verification.test.js`: PASSED
+  - `backend/tests` (via `python -m pytest tests`): PASSED (92/92 passed, 0 regressions)
+
 - **Remaining Risk**:
-  - None. Minimal, zero-code-logic change restricted purely to extension injection boundaries.
+  - Live third-party streaming sites dynamically changing DOM class names or using canvas/WebGL subtitles (mitigated by external subtitle file loader as universal fallback).
 
 ## Next task
 
-Standby for next instructions.
+Manual browser verification by the user on live YouTube, Netflix, and external subtitle video targets.
+
 

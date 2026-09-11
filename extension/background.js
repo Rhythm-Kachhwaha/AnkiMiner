@@ -43,6 +43,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({ok: true, enabled: isMiningModeEnabled});
     return true;
   }
+  if (message?.type === "FETCH_YOUTUBE_TIMEDTEXT") {
+    fetch(message.url)
+      .then(res => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+        return res.text();
+      })
+      .then(text => sendResponse({ok: true, text}))
+      .catch(err => sendResponse({ok: false, error: err.message}));
+    return true;
+  }
+  if (message?.type === "LOAD_SUBTITLE_CUES" || message?.type === "SET_SUBTITLE_OFFSET" || message?.type === "SELECT_YOUTUBE_TRACK") {
+    activeTab().then(tab => {
+      if (tab?.id) {
+        chrome.tabs.sendMessage(tab.id, message).catch(() => {});
+      }
+    }).catch(() => {});
+    sendResponse({ok: true});
+    return true;
+  }
 });
 
 chrome.tabs.onActivated.addListener(activeInfo => {

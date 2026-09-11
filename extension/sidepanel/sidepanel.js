@@ -57,6 +57,29 @@ const historyListContainer = document.querySelector("#history-list-container");
 const historyEmpty = document.querySelector("#history-empty");
 const historyCardsList = document.querySelector("#history-cards-list");
 
+// Navigation tab elements
+const tabBtnText = document.querySelector("#tab-btn-text");
+const tabBtnVideo = document.querySelector("#tab-btn-video");
+const textMiningView = document.querySelector("#text-mining-view");
+const videoMiningView = document.querySelector("#video-mining-view");
+
+// Video Mining elements
+const videoMiningSection = document.querySelector("#video-mining-section");
+const subtitlesFileStatus = document.querySelector("#subtitles-file-status");
+const loadSubtitlesBtn = document.querySelector("#load-subtitles-btn");
+const clearSubtitlesBtn = document.querySelector("#clear-subtitles-btn");
+const subtitlesFileInput = document.querySelector("#subtitles-file-input");
+const videoTrackSelect = document.querySelector("#video-track-select");
+const offsetMinusBtn = document.querySelector("#offset-minus-btn");
+const offsetResetBtn = document.querySelector("#offset-reset-btn");
+const offsetPlusBtn = document.querySelector("#offset-plus-btn");
+const offsetDisplay = document.querySelector("#offset-display");
+const videoCurrentCuePreview = document.querySelector("#video-current-cue-preview");
+
+let currentSubtitleOffset = 0.0;
+let loadedSubtitlesFilename = "";
+let availableCaptionTracks = [];
+
 let selectedHistoryCardId = null;
 let searchDebounceTimeout = null;
 
@@ -1037,6 +1060,176 @@ loadFontPreference().catch(() => {});
 loadDecks().catch(() => {});
 loadModels().catch(() => {});
 loadHistory().catch(() => {});
+loadTabPreference().catch(() => {});
+
+// -------------------------------------------------------------
+// Video Mining Logic & Messaging
+// -------------------------------------------------------------
+function updateOffsetDisplay(offset) {
+  currentSubtitleOffset = offset;
+  if (offsetDisplay) {
+    const sign = offset > 0 ? "+" : "";
+    offsetDisplay.textContent = `${sign}${offset.toFixed(1)}s`;
+  }
+}
+
+async function broadcastToActiveVideo(message) {
+  try {
+    if (typeof chrome !== "undefined" && chrome.tabs?.query) {
+      const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+      if (tab?.id) {
+        chrome.tabs.sendMessage(tab.id, message).catch(() => {});
+      }
+    }
+  } catch (_) {}
+  try {
+    if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+      chrome.runtime.sendMessage(message).catch(() => {});
+    }
+  } catch (_) {}
+}
+
+async function handleSubtitleFileSelect(file) {
+  if (!file) return;
+  try {
+    const text = await file.text();
+    const parser = typeof SubtitleParser !== "undefined" ? SubtitleParser : (globalThis.SubtitleParser || null);
+    if (!parser) {
+      setStatus("Subtitle parser unavailable.", true);
+      return;
+    }
+    const cues = parser.parseSubtitles(text, file.name);
+    if (!cues || cues.length === 0) {
+      setStatus(`No valid subtitle cues found in "${file.name}".`, true);
+      return;
+    }
+    loadedSubtitlesFilename = file.name;
+    if (subtitlesFileStatus) {
+      subtitlesFileStatus.textContent = file.name;
+      subtitlesFileStatus.classList.add("active");
+      subtitlesFileStatus.title = `${file.name} (${cues.length} cues)`;
+    }
+    setStatus(`Loaded ${cues.length} subtitle cues from "${file.name}".`);
+    await broadcastToActiveVideo({
+      type: "LOAD_SUBTITLE_CUES",
+      cues,
+      filename: file.name
+    });
+  } catch (err) {
+    setStatus(`Failed to read subtitle file: ${err.message}`, true);
+  }
+}
+
+function adjustOffset(delta) {
+  const newOffset = +(currentSubtitleOffset + delta).toFixed(1);
+  updateOffsetDisplay(newOffset);
+  broadcastToActiveVideo({
+    type: "SET_SUBTITLE_OFFSET",
+    offset: newOffset
+  });
+}
+
+function resetOffset() {
+  updateOffsetDisplay(0.0);
+  broadcastToActiveVideo({
+    type: "SET_SUBTITLE_OFFSET",
+    offset: 0.0
+  });
+}
+
+async function clearSubtitles() {
+  if (subtitlesFileInput) subtitlesFileInput.value = "";
+  loadedSubtitlesFilename = "";
+  if (subtitlesFileStatus) {
+    subtitlesFileStatus.textContent = "No subtitles";
+    subtitlesFileStatus.classList.remove("active");
+    subtitlesFileStatus.title = "";
+  }
+  if (videoCurrentCuePreview) {
+    videoCurrentCuePreview.textContent = "—";
+  }
+  if (videoTrackSelect) {
+    videoTrackSelect.hidden = true;
+    videoTrackSelect.replaceChildren();
+  }
+  resetOffset();
+  setStatus("Cleared loaded subtitles.");
+  await broadcastToActiveVideo({ type: "CLEAR_SUBTITLES" });
+}
+
+function switchMiningTab(targetTab) {
+  const isVideo = targetTab === "video";
+  if (tabBtnText && tabBtnVideo && textMiningView && videoMiningView) {
+    tabBtnText.classList.toggle("active", !isVideo);
+    tabBtnText.setAttribute("aria-selected", String(!isVideo));
+    tabBtnVideo.classList.toggle("active", isVideo);
+    tabBtnVideo.setAttribute("aria-selected", String(isVideo));
+
+    textMiningView.hidden = isVideo;
+    videoMiningView.hidden = !isVideo;
+
+    try {
+      if (typeof chrome !== "undefined" && chrome.storage?.local) {
+        chrome.storage.local.set({ active_mining_tab: targetTab });
+      } else if (typeof localStorage !== "undefined") {
+        localStorage.setItem("active_mining_tab", targetTab);
+      }
+    } catch (_) {}
+  }
+}
+
+async function loadTabPreference() {
+  try {
+    let savedTab = "text";
+    if (typeof chrome !== "undefined" && chrome.storage?.local) {
+      const stored = await chrome.storage.local.get("active_mining_tab");
+      if (stored?.active_mining_tab) savedTab = stored.active_mining_tab;
+    } else if (typeof localStorage !== "undefined") {
+      const stored = localStorage.getItem("active_mining_tab");
+      if (stored) savedTab = stored;
+    }
+    switchMiningTab(savedTab);
+  } catch (_) {}
+}
+
+if (tabBtnText) {
+  tabBtnText.addEventListener("click", () => switchMiningTab("text"));
+}
+if (tabBtnVideo) {
+  tabBtnVideo.addEventListener("click", () => switchMiningTab("video"));
+}
+
+if (clearSubtitlesBtn) {
+  clearSubtitlesBtn.addEventListener("click", clearSubtitles);
+}
+
+if (loadSubtitlesBtn && subtitlesFileInput) {
+  loadSubtitlesBtn.addEventListener("click", () => subtitlesFileInput.click());
+  subtitlesFileInput.addEventListener("change", (e) => {
+    const file = e.target.files?.[0];
+    if (file) handleSubtitleFileSelect(file);
+  });
+}
+
+if (offsetMinusBtn) {
+  offsetMinusBtn.addEventListener("click", () => adjustOffset(-0.5));
+}
+if (offsetPlusBtn) {
+  offsetPlusBtn.addEventListener("click", () => adjustOffset(0.5));
+}
+if (offsetResetBtn) {
+  offsetResetBtn.addEventListener("click", () => resetOffset());
+}
+
+if (videoTrackSelect) {
+  videoTrackSelect.addEventListener("change", () => {
+    const trackIndex = parseInt(videoTrackSelect.value, 10);
+    broadcastToActiveVideo({
+      type: "SELECT_YOUTUBE_TRACK",
+      trackIndex
+    });
+  });
+}
 
 // Default Yomitan indicator to ready state
 setIndicatorStatus(indicatorYomitan, "connected", "Yomitan: Ready");
@@ -1055,6 +1248,44 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
   if (message?.type === "CAPTURE_DIAGNOSTIC") {
     setStatus(`${message.stage}: ${message.error}`, true);
+    sendResponse?.({ok: true});
+    return true;
+  }
+  if (message?.type === "SUBTITLE_CUE_CHANGED") {
+    if (videoCurrentCuePreview) {
+      videoCurrentCuePreview.textContent = message.cue?.text || "—";
+    }
+    if (typeof message.offset === "number" && message.offset !== currentSubtitleOffset) {
+      updateOffsetDisplay(message.offset);
+    }
+    sendResponse?.({ok: true});
+    return true;
+  }
+  if (message?.type === "SUBTITLE_FILE_LOADED") {
+    if (subtitlesFileStatus && message.filename) {
+      subtitlesFileStatus.textContent = message.filename;
+      subtitlesFileStatus.classList.add("active");
+    }
+    sendResponse?.({ok: true});
+    return true;
+  }
+  if (message?.type === "YOUTUBE_TRACKS_FOUND") {
+    if (videoTrackSelect && Array.isArray(message.tracks) && message.tracks.length > 0) {
+      availableCaptionTracks = message.tracks;
+      videoTrackSelect.replaceChildren();
+      message.tracks.forEach((t, idx) => {
+        const opt = document.createElement("option");
+        opt.value = String(idx);
+        opt.textContent = `${t.name || t.languageCode || `Track ${idx + 1}`}${t.isAuto ? " (auto)" : ""}`;
+        if (t.selected) opt.selected = true;
+        videoTrackSelect.appendChild(opt);
+      });
+      videoTrackSelect.hidden = false;
+      if (subtitlesFileStatus) {
+        subtitlesFileStatus.textContent = "YouTube CC";
+        subtitlesFileStatus.classList.add("active");
+      }
+    }
     sendResponse?.({ok: true});
     return true;
   }

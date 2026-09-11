@@ -37,13 +37,31 @@ assert.ok(html.includes('id="history-deck-filter"'), "History deck filter select
 assert.ok(html.includes('id="history-sync-filter"'), "History sync filter select must exist");
 assert.ok(html.includes('id="history-list-container"'), "History list container must exist");
 assert.ok(html.includes('id="history-empty"'), "History empty state message element must exist");
-assert.ok(html.includes('id="history-cards-list"'), "History cards list container must exist");
+// Mode Navigation tabs & Decluttered Views
+assert.ok(html.includes('id="tab-btn-text"'), "Text mining tab button must exist");
+assert.ok(html.includes('id="tab-btn-video"'), "Video mining tab button must exist");
+assert.ok(html.includes('id="text-mining-view"'), "Text mining view container must exist");
+assert.ok(html.includes('id="video-mining-view"'), "Video mining view container must exist");
+assert.ok(html.includes('id="clear-subtitles-btn"'), "Clear subtitles button must exist");
+
+// Video Mining elements
+assert.ok(html.includes('id="video-mining-section"'), "Video mining section must exist");
+assert.ok(html.includes('id="load-subtitles-btn"'), "Load subtitles button must exist");
+assert.ok(html.includes('id="subtitles-file-input"'), "Subtitles file input must exist");
+assert.ok(html.includes('id="subtitles-file-status"'), "Subtitles file status badge must exist");
+assert.ok(html.includes('id="video-track-select"'), "Video track selector must exist");
+assert.ok(html.includes('id="offset-minus-btn"'), "Offset minus button must exist");
+assert.ok(html.includes('id="offset-reset-btn"'), "Offset reset button must exist");
+assert.ok(html.includes('id="offset-plus-btn"'), "Offset plus button must exist");
+assert.ok(html.includes('id="offset-display"'), "Offset display element must exist");
+assert.ok(html.includes('id="video-current-cue-preview"'), "Video current cue preview element must exist");
+assert.ok(html.includes('<script src="../lib/subtitle-parser.js"></script>'), "Subtitle parser script must be loaded in sidepanel");
 
 // Verify default state
 assert.ok(html.includes('<option value="Default">Default</option>'), "Default deck option must exist");
 assert.ok(html.includes('id="sync-anki-btn" class="btn-sync" disabled'), "Sync button should start disabled");
 
-console.log("sidepanel HTML tests passed (Phase 4, 5, 6 & 7 DOM verified)");
+console.log("sidepanel HTML tests passed (Phase 4, 5, 6, 7 & Video Mining DOM verified)");
 
 // Verify updateSyncUI state machine
 const vm = require("node:vm");

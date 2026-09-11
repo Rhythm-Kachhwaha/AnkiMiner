@@ -9,7 +9,9 @@
     "scripting"
   ],
   "host_permissions": [
-    "http://127.0.0.1:8000/*"
+    "http://127.0.0.1:8000/*",
+    "*://*.youtube.com/*",
+    "*://*.netflix.com/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -23,12 +25,26 @@
         "<all_urls>"
       ],
       "js": [
+        "lib/subtitle-parser.js",
+        "content/adapters/youtube-adapter.js",
+        "content/adapters/netflix-adapter.js",
         "content/capture-utils.js",
-        "content/content.js"
+        "content/content.js",
+        "content/video-mining-poc.js"
       ],
       "run_at": "document_idle",
       "all_frames": true,
       "match_about_blank": true
+    },
+    {
+      "matches": [
+        "*://*.youtube.com/*"
+      ],
+      "js": [
+        "content/adapters/youtube-bridge.js"
+      ],
+      "world": "MAIN",
+      "run_at": "document_start"
     }
   ]
 }

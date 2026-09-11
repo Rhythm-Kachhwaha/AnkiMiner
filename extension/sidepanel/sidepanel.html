@@ -27,17 +27,66 @@
       </div>
     </header>
 
-    <div class="mining-bar">
-      <div class="mining-controls">
-        <button id="mining-toggle" type="button" aria-pressed="false" class="btn-mining">Start mining</button>
-        <p id="mode" class="status-mode">Mining mode is off.</p>
+    <!-- Mining Mode Navigation Tabs -->
+    <nav class="mining-nav-tabs" role="tablist" aria-label="Mining Mode">
+      <button type="button" id="tab-btn-text" class="tab-btn active" role="tab" aria-selected="true" aria-controls="text-mining-view">
+        Text Mining
+      </button>
+      <button type="button" id="tab-btn-video" class="tab-btn" role="tab" aria-selected="false" aria-controls="video-mining-view">
+        Video Mining
+      </button>
+    </nav>
+
+    <!-- Text Mining View -->
+    <div id="text-mining-view" class="mining-tab-view" role="tabpanel" aria-labelledby="tab-btn-text">
+      <div class="mining-bar">
+        <div class="mining-controls">
+          <button id="mining-toggle" type="button" aria-pressed="false" class="btn-mining">Start mining</button>
+          <p id="mode" class="status-mode">Mining mode is off.</p>
+        </div>
+        <span id="session-count" class="session-counter">Cards this session: 0</span>
       </div>
-      <span id="session-count" class="session-counter">Cards this session: 0</span>
+
+      <div class="capture-banner">
+        <p id="capture-status" class="status">Select Japanese text after starting mining.</p>
+        <span id="save-badge" class="badge" hidden></span>
+      </div>
     </div>
 
-    <div class="capture-banner">
-      <p id="capture-status" class="status">Select Japanese text after starting mining.</p>
-      <span id="save-badge" class="badge" hidden></span>
+    <!-- Video Mining View -->
+    <div id="video-mining-view" class="mining-tab-view" role="tabpanel" aria-labelledby="tab-btn-video" hidden>
+      <section id="video-mining-section" class="video-mining-panel" aria-label="Video Mining Controls">
+        <div class="video-toolbar">
+          <div class="video-action-buttons">
+            <button type="button" id="load-subtitles-btn" class="btn-subtitles">Load Subtitles (.srt, .vtt)</button>
+            <button type="button" id="clear-subtitles-btn" class="btn-clear-subtitles" title="Clear loaded subtitles">Clear</button>
+            <input type="file" id="subtitles-file-input" accept=".srt,.vtt" hidden>
+          </div>
+          <span id="subtitles-file-status" class="subtitles-status-pill">No subtitles</span>
+        </div>
+
+        <div class="video-controls-row">
+          <select id="video-track-select" class="video-track-select" hidden aria-label="Select subtitle track">
+            <option value="">Default track</option>
+          </select>
+
+          <div class="video-offset-controls">
+            <span class="offset-label">Offset:</span>
+            <div class="offset-btn-group">
+              <button type="button" id="offset-minus-btn" class="btn-offset" title="Subtract 0.5s">-0.5s</button>
+              <button type="button" id="offset-reset-btn" class="btn-offset btn-offset-reset" title="Reset offset to 0.0s">
+                <span id="offset-display">0.0s</span>
+              </button>
+              <button type="button" id="offset-plus-btn" class="btn-offset" title="Add 0.5s">+0.5s</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="video-cue-preview-container">
+          <div class="cue-preview-label">Active Subtitle:</div>
+          <div id="video-current-cue-preview" class="video-cue-preview">—</div>
+        </div>
+      </section>
     </div>
 
     <!-- Prominent Captured Japanese Word Display -->
@@ -194,6 +243,7 @@
       </div>
     </section>
   </main>
+  <script src="../lib/subtitle-parser.js"></script>
   <script src="sidepanel.js"></script>
 </body>
 </html>
