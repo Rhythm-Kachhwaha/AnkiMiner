@@ -246,12 +246,25 @@ Live AnkiConnect and live Yomitan verification passed with clean test cleanup.
 
 ## Known issues
 
-- None. Phase 7 is complete and fully verified.
+- None.
+
+## Recent changes (HiAnime + ASBPlayer Subtitle Capture Compatibility)
+
+- **Files Changed**:
+  - `extension/manifest.json`: Added `"all_frames": true` and `"match_about_blank": true` to the `content_scripts` declaration.
+  - `extension/tests/capture-frame-verification.test.js`: Added regression and iframe capture contract test verifying manifest properties, top-level site capture (YouTube/Netflix), and dynamic `about:blank` iframe capture (HiAnime + ASBPlayer `asbplayer-ui-frame` `.asbplayer-subtitles`).
+- **Behavior Delivered**:
+  - Enabled existing AnkiMiner content scripts (`capture-utils.js` and `content.js`) to run inside dynamically generated/about:blank iframes like ASBPlayer's `asbplayer-ui-frame`.
+  - Preserved all existing capture logic, top-level site capture (YouTube, Netflix, general web pages), Yomitan integration, backend API, and database models without modification.
+- **Verification Run**:
+  - `extension/tests/capture-utils.test.js`: PASSED
+  - `extension/tests/sidepanel.test.js`: PASSED
+  - `extension/tests/capture-frame-verification.test.js`: PASSED (verified manifest schema, top-level selection capture, and ASBPlayer iframe selection capture)
+  - `backend/tests` (via `python -m pytest tests`): PASSED (92/92 passed)
+- **Remaining Risk**:
+  - None. Minimal, zero-code-logic change restricted purely to extension injection boundaries.
 
 ## Next task
 
-Phase 7 complete and verified. Ready for next project milestones or deployment.
-
-
-
+Standby for next instructions.
 
