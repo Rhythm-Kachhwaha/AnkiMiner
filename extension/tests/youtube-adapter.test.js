@@ -14,7 +14,7 @@ const {
 
 console.log("Starting youtube-adapter tests...");
 
-// 1. normalizeCaptionTrack
+// 1. normalizeCaptionTrack with SRV3
 const rawTrackJa = {
   baseUrl: "https://www.youtube.com/api/timedtext?v=123&lang=ja",
   name: { simpleText: "Japanese" },
@@ -26,7 +26,8 @@ const normJa = normalizeCaptionTrack(rawTrackJa);
 assert.equal(normJa.languageCode, "ja");
 assert.equal(normJa.name, "Japanese");
 assert.equal(normJa.isAuto, false);
-assert.equal(normJa.vttUrl, "https://www.youtube.com/api/timedtext?v=123&lang=ja&fmt=vtt");
+assert.ok(normJa.srv3Url.includes("fmt=srv3"), "Must format URL with fmt=srv3");
+assert.ok(normJa.srv3Url.includes("c=WEB"), "Must include client parameter c=WEB");
 
 const rawTrackJaAuto = {
   baseUrl: "https://www.youtube.com/api/timedtext?v=123&lang=ja&kind=asr",
@@ -37,7 +38,7 @@ const rawTrackJaAuto = {
 
 const normJaAuto = normalizeCaptionTrack(rawTrackJaAuto);
 assert.equal(normJaAuto.isAuto, true);
-assert.equal(normJaAuto.vttUrl, "https://www.youtube.com/api/timedtext?v=123&lang=ja&kind=asr&fmt=vtt");
+assert.ok(normJaAuto.srv3Url.includes("fmt=srv3"));
 
 console.log("PASS: normalizeCaptionTrack verified.");
 
@@ -63,7 +64,21 @@ assert.equal(prioritized[0].name, "Japanese", "Manual Japanese track must be #1 
 assert.equal(prioritized[1].name, "Japanese (auto-generated)", "Auto Japanese track must be #2 priority");
 assert.ok(!prioritized[2].languageCode.startsWith("ja"), "Non-Japanese tracks follow");
 
-console.log("PASS: prioritizeTracks verified.");
+// 2b. Auto-translate track generation when only English exists
+const englishOnly = [
+  {
+    baseUrl: "https://www.youtube.com/api/timedtext?v=xyz&lang=en",
+    name: { simpleText: "English" },
+    languageCode: "en"
+  }
+];
+
+const prioritizedAutoTranslate = prioritizeTracks(englishOnly);
+assert.equal(prioritizedAutoTranslate.length, 2);
+assert.equal(prioritizedAutoTranslate[0].languageCode, "ja_translated");
+assert.ok(prioritizedAutoTranslate[0].srv3Url.includes("tlang=ja"));
+
+console.log("PASS: prioritizeTracks & auto-translate synthesis verified.");
 
 // 3. extractTracksFromHtml
 const mockPlayerScript = `
@@ -90,17 +105,20 @@ assert.equal(extracted[0].baseUrl, "https://www.youtube.com/api/timedtext?v=abc&
 
 console.log("PASS: extractTracksFromHtml verified.");
 
-// 4. YouTubeAdapter Integration with Mock Environment
+// 4. YouTubeAdapter Integration with Mock Environment & SRV3 XML Response
 let loadedCues = null;
 let loadedTrack = null;
 
-const sampleVTT = `WEBVTT
-00:00:01.000 --> 00:00:04.000
-日本語の字幕テスト
+const sampleSRV3 = `<?xml version="1.0" encoding="utf-8" ?>
+<timedtext format="3">
+<body id="0">
+  <p t="1500" d="3000">日本語のアダプターテスト</p>
+</body>
+</timedtext>
 `;
 
 // Mock global environment
-global.location = { hostname: "www.youtube.com" };
+global.location = { hostname: "www.youtube.com", href: "https://www.youtube.com/watch?v=abc" };
 global.document = {
   getElementById: () => null,
   head: { appendChild: () => {} },
@@ -113,7 +131,7 @@ global.chrome = {
   runtime: {
     sendMessage: (msg) => {
       if (msg.type === "FETCH_YOUTUBE_TIMEDTEXT") {
-        return Promise.resolve({ ok: true, text: sampleVTT });
+        return Promise.resolve({ ok: true, text: sampleSRV3 });
       }
       return Promise.resolve({ ok: true });
     },
@@ -129,12 +147,14 @@ const adapter = new YouTubeAdapter({
 });
 
 adapter.checkAndLoad().then(() => {
-  assert.ok(loadedCues, "Cues must be loaded from mock timedtext response");
+  assert.ok(loadedCues, "Cues must be loaded from mock SRV3 response");
   assert.equal(loadedCues.length, 1);
-  assert.equal(loadedCues[0].text, "日本語の字幕テスト");
+  assert.equal(loadedCues[0].text, "日本語のアダプターテスト");
+  assert.equal(loadedCues[0].startTime, 1.5);
+  assert.equal(loadedCues[0].endTime, 4.5);
   assert.equal(loadedTrack.languageCode, "ja");
 
-  console.log("PASS: YouTubeAdapter end-to-end integration verified.");
+  console.log("PASS: YouTubeAdapter end-to-end SRV3 integration verified.");
   console.log("ALL YOUTUBE ADAPTER TESTS PASSED!");
 }).catch(err => {
   console.error("FAILED:", err);

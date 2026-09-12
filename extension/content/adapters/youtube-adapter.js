@@ -2,8 +2,8 @@
  * AnkiMiner - YouTube Native Subtitle Extractor Adapter
  * 
  * Automatically detects YouTube caption tracks, extracts Japanese subtitles,
- * converts them to standardized VTT cues, suppresses YouTube's native non-selectable
- * captions, and feeds the cues into AnkiMiner's selectable overlay engine.
+ * converts them to standardized timestamped cues via SRV3 parser, suppresses YouTube's
+ * native non-selectable captions, and feeds the cues into AnkiMiner's selectable overlay engine.
  */
 
 (() => {
@@ -17,19 +17,31 @@
     const lang = (rawTrack.languageCode || "").toLowerCase();
     const name = rawTrack.name?.simpleText ||
       (Array.isArray(rawTrack.name?.runs) ? rawTrack.name.runs.map(r => r.text).join("") : "") ||
+      rawTrack.displayName ||
+      rawTrack.languageName ||
+      rawTrack.name ||
       rawTrack.languageCode ||
       "Unknown";
-    const isAuto = rawTrack.kind === "asr" || /auto|自動/i.test(name);
-    const baseUrl = rawTrack.baseUrl || "";
-    const vttUrl = baseUrl
-      ? (baseUrl.includes("&fmt=") ? baseUrl.replace(/&fmt=[^&]+/, "&fmt=vtt") : `${baseUrl}&fmt=vtt`)
-      : "";
+    const isAuto = rawTrack.isAuto || rawTrack.kind === "asr" || /auto|自動/i.test(name);
+    const baseUrl = rawTrack.baseUrl || rawTrack.url || "";
+    
+    let srv3Url = rawTrack.srv3Url || "";
+    if (!srv3Url && baseUrl) {
+      try {
+        const url = new URL(baseUrl, typeof window !== "undefined" ? window.location.href : "https://www.youtube.com");
+        url.searchParams.set("fmt", "srv3");
+        url.searchParams.set("c", "WEB");
+        srv3Url = url.toString();
+      } catch (_) {
+        srv3Url = baseUrl.includes("&fmt=") ? baseUrl.replace(/&fmt=[^&]+/, "&fmt=srv3") : `${baseUrl}&fmt=srv3`;
+      }
+    }
 
     return {
       languageCode: lang,
       name,
       baseUrl,
-      vttUrl,
+      srv3Url,
       isAuto
     };
   }
@@ -38,9 +50,9 @@
     if (!Array.isArray(rawTracks) || rawTracks.length === 0) return [];
     const normalized = rawTracks
       .map(normalizeCaptionTrack)
-      .filter(t => t && Boolean(t.baseUrl));
+      .filter(t => t && Boolean(t.srv3Url || t.baseUrl));
 
-    return normalized.sort((a, b) => {
+    const sorted = normalized.sort((a, b) => {
       const aJa = a.languageCode.startsWith("ja");
       const bJa = b.languageCode.startsWith("ja");
       if (aJa && !bJa) return -1;
@@ -51,6 +63,27 @@
       }
       return 0;
     });
+
+    // If no native Japanese track exists, offer an auto-translated Japanese option from the top track
+    const hasJa = sorted.some(t => t.languageCode.startsWith("ja"));
+    if (!hasJa && sorted.length > 0) {
+      const base = sorted[0];
+      try {
+        const trUrl = new URL(base.srv3Url || base.baseUrl, typeof window !== "undefined" ? window.location.href : "https://www.youtube.com");
+        trUrl.searchParams.set("tlang", "ja");
+        trUrl.searchParams.set("fmt", "srv3");
+        const translatedTrack = {
+          languageCode: "ja_translated",
+          name: `${base.name} >> 日本語 (自動翻訳)`,
+          baseUrl: base.baseUrl,
+          srv3Url: trUrl.toString(),
+          isAuto: true
+        };
+        sorted.unshift(translatedTrack);
+      } catch (_) {}
+    }
+
+    return sorted;
   }
 
   function extractTracksFromHtml(htmlContent) {
@@ -104,27 +137,30 @@
     return [];
   }
 
-  async function fetchCaptionVTT(vttUrl) {
-    if (!vttUrl) return "";
+  async function fetchCaptionSRV3(srv3Url) {
+    if (!srv3Url) return "";
 
-    // 1. Try background fetch to avoid page CSP restrictions
+    // 1. Direct fetch (same-origin on youtube.com carries all active session cookies/headers)
     try {
-      if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
-        const resp = await chrome.runtime.sendMessage({
-          type: "FETCH_YOUTUBE_TIMEDTEXT",
-          url: vttUrl
-        });
-        if (resp?.ok && resp.text) {
-          return resp.text;
+      const res = await fetch(srv3Url);
+      if (res.ok) {
+        const text = await res.text();
+        if (text && (text.includes("<timedtext") || text.includes("<p ") || text.includes("<transcript"))) {
+          return text;
         }
       }
     } catch (_) {}
 
-    // 2. Direct fetch fallback (same-origin on youtube.com)
+    // 2. Background service worker fetch fallback
     try {
-      const res = await fetch(vttUrl);
-      if (res.ok) {
-        return await res.text();
+      if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+        const resp = await chrome.runtime.sendMessage({
+          type: "FETCH_YOUTUBE_TIMEDTEXT",
+          url: srv3Url
+        });
+        if (resp?.ok && resp.text) {
+          return resp.text;
+        }
       }
     } catch (_) {}
 
@@ -154,6 +190,7 @@
       this.onCuesLoaded = onCuesLoaded;
       this.tracks = [];
       this.activeTrack = null;
+      this.currentVideoId = null;
       this._boundCheck = this.checkAndLoad.bind(this);
       this._boundBridgeMessage = this.handleBridgeMessage.bind(this);
     }
@@ -171,7 +208,7 @@
         window.addEventListener("load", this._boundCheck);
       }
 
-      // Listen for runtime track switch requests
+      // Listen for runtime track switch requests from sidepanel
       if (typeof chrome !== "undefined" && chrome.runtime?.onMessage) {
         chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           if (message?.type === "SELECT_YOUTUBE_TRACK" && typeof message.trackIndex === "number") {
@@ -208,6 +245,7 @@
       if (!event || event.source !== window || !event.data) return;
       if (event.data.source === "ANKIMINER_YT_MAIN" && event.data.type === "YT_CAPTION_TRACKS") {
         if (Array.isArray(event.data.tracks) && event.data.tracks.length > 0) {
+          this.currentVideoId = event.data.videoId || this.currentVideoId;
           await this.processRawTracks(event.data.tracks);
         }
       }
@@ -235,7 +273,7 @@
         }
       } catch (_) {}
 
-      // Auto-load top prioritized track (Japanese prioritized)
+      // Auto-load top prioritized track (Japanese prioritized or translated)
       const topTrack = this.tracks[0];
       if (topTrack && topTrack.languageCode.startsWith("ja")) {
         await this.loadTrack(topTrack);
@@ -249,11 +287,12 @@
     }
 
     async loadTrack(track) {
-      if (!track || !track.vttUrl) return;
+      const targetUrl = track?.srv3Url || track?.baseUrl;
+      if (!targetUrl) return;
       this.activeTrack = track;
 
-      const vttText = await fetchCaptionVTT(track.vttUrl);
-      if (!vttText) return;
+      const srv3Text = await fetchCaptionSRV3(targetUrl);
+      if (!srv3Text) return;
 
       const parser = typeof SubtitleParser !== "undefined"
         ? SubtitleParser
@@ -261,8 +300,12 @@
 
       if (!parser) return;
 
-      const cues = parser.parseVTT(vttText);
-      if (cues.length > 0 && typeof this.onCuesLoaded === "function") {
+      let cues = parser.parseSRV3(srv3Text);
+      if (!cues || cues.length === 0) {
+        cues = parser.parseSubtitles(srv3Text, "srv3");
+      }
+
+      if (cues && cues.length > 0 && typeof this.onCuesLoaded === "function") {
         this.onCuesLoaded(cues, track);
       }
     }
@@ -282,7 +325,7 @@
     prioritizeTracks,
     extractTracksFromHtml,
     findCaptionTracksInDOM,
-    fetchCaptionVTT,
+    fetchCaptionSRV3,
     hideNativeYouTubeCaptions,
     YouTubeAdapter
   };

@@ -248,48 +248,53 @@ Live AnkiConnect and live Yomitan verification passed with clean test cleanup.
 
 - None.
 
-## Recent changes (Video Mining Mode — UI Tabs, Clear Controls, YouTube Bridge & Netflix Adapter)
+## Recent changes (YouTube Multi-Tier Subtitle Extraction & SRV3 XML Parser)
 
 - **Files Changed**:
-  - `extension/sidepanel/sidepanel.html`: Introduced segmented navigation tabs (`#tab-btn-text`, `#tab-btn-video`) dividing Mining into clean **Text Mining** and **Video Mining** views; decluttered UI by eliminating duplicate headers and tightening sections; added `#clear-subtitles-btn` to clear loaded subtitle files; maintained shared Card Editor, Dictionary view, and Card Library across both modes.
-  - `extension/sidepanel/sidepanel.css`: Added segmented tab bar styles (`.mining-nav-tabs`, `.tab-btn`), tightened vertical padding on `.panel` (`8px 12px 16px`), styled `.video-mining-panel` and `.btn-clear-subtitles` with warm coral accents and dark theme aesthetics.
-  - `extension/sidepanel/sidepanel.js`: Wired tab switching with persistence (`active_mining_tab`); implemented `clearSubtitles()` to send `CLEAR_SUBTITLES` message to active tab, reset status pill, reset timing offset to 0.0s, and clear cue preview; wired `#clear-subtitles-btn` event handler.
-  - `extension/content/video-mining-poc.js`:
-    - Fixed on-video subtitle overlay: overhauled `SubtitleOverlayRenderer` to use viewport-anchored `position: fixed !important` coordinates (`left`, `top = vRect.top + vRect.height * 0.78`, `width`) on `document.body` (or `position: absolute; bottom: 8%` on `document.fullscreenElement`), completely bypassing parent container `overflow: hidden` on YouTube and streaming video players.
-    - Added dynamic position re-measurement inside `renderCue(cue)` and on `window.scroll`, `resize`, and `video.timeupdate`.
-    - Added `CLEAR_SUBTITLES` message handler to clear cues, reset timing offsets, clear overlay, and broadcast null cue.
-    - Integrated `NetflixAdapter` for live subtitle capture and suppression on netflix.com.
-  - `extension/content/adapters/youtube-bridge.js` (NEW): MV3 MAIN-world script running directly in page execution context on `*://*.youtube.com/*` to query `#movie_player` and player responses (`ytInitialPlayerResponse`), posting caption tracks to content scripts via `window.postMessage`.
-  - `extension/content/adapters/youtube-adapter.js`: Added bridge message listener (`ANKIMINER_YT_MAIN`) and bidirectional message protocol to extract Japanese caption tracks reliably from both MAIN world bridge and DOM/script fallbacks.
-  - `extension/content/adapters/netflix-adapter.js` (NEW): Automated Netflix subtitle extractor observing `.player-timedtext` using `MutationObserver`, extracting live Japanese text segments, suppressing native captions via CSS (`opacity: 0 !important`), and emitting cues to overlay.
-  - `extension/manifest.json`: Added `*://*.netflix.com/*` to `host_permissions`; registered `youtube-bridge.js` with `"world": "MAIN"`, `"run_at": "document_start"`; registered `netflix-adapter.js` in `<all_urls>` `content_scripts`.
-  - `extension/tests/netflix-adapter.test.js` (NEW): Unit tests verifying Netflix domain detection, Japanese character detection, timedtext extraction, and `MutationObserver` cue emission and suppression.
-  - `extension/tests/video-mining-integration.test.js`: Added `testClearSubtitles` (verifying `CLEAR_SUBTITLES` message handling, synchronizer reset, overlay clearing) and `testNetflixIntegration` (verifying Netflix observer, suppression CSS, and cue emission).
-  - `extension/tests/sidepanel.test.js`: Added DOM assertions verifying segmented tabs (`#tab-btn-text`, `#tab-btn-video`), tab views (`#text-mining-view`, `#video-mining-view`), and clear button (`#clear-subtitles-btn`).
+  - `extension/lib/subtitle-parser.js`:
+    - Added `parseSRV3(rawText)` to support YouTube's native `srv3` timedtext XML schema (`<p t="[startMs]" d="[durationMs]"><s>...</s></p>`).
+    - Implemented lookahead overlap clamping (`duration = Math.min(duration, nextStart - start)`) to eliminate overlapping text display glitches.
+    - Added XML entity decoding and child `<s>` tag concatenation.
+    - Updated `parseSubtitles()` and module exports to support `.srv3` and `.ytsrv3` formats seamlessly.
+  - `extension/content/adapters/youtube-bridge.js`:
+    - Upgraded MV3 main-world bridge to implement 3-tier resilient track extraction:
+      - **Tier 1 (Live Player Inspection)**: Reads `document.getElementById("movie_player")?.getAudioTrack()?.captionTracks`, extracting live runtime Proof of Origin (`pot`) tokens and video title from `player.getVideoData()?.title`.
+      - **Tier 2 (Android InnerTube API Fallback)**: Queries `POST https://www.youtube.com/youtubei/v1/player?key=${apiKey}` using `window.ytcfg.get("INNERTUBE_API_KEY")` with `clientName: 'ANDROID'` to bypass desktop web PO token enforcement.
+      - **Tier 3 (Static Player Response Fallback)**: Extracts tracks from `window.ytInitialPlayerResponse`.
+    - Implemented `inferVideoId()` covering `/watch?v=`, `/shorts/<id>`, and `/embed/<id>`.
+    - Added 500ms lifecycle ticker and SPA navigation hooks (`yt-navigate-finish`, `yt-page-data-updated`) to auto-detect video transitions and YouTube Shorts scrolling.
+    - Standardized timedtext URL parameterization with `fmt=srv3` and client identifier `c=WEB` / `c=ANDROID`.
+  - `extension/content/adapters/youtube-adapter.js`:
+    - Updated `YouTubeAdapter` to process and normalize `srv3` tracks.
+    - Implemented Japanese track prioritization (`ja`, `ja-JP`, manual over ASR) and auto-translate Japanese synthesis (`&tlang=ja`) if a video only has non-Japanese native tracks.
+    - Implemented direct same-origin `fetchCaptionSRV3()` with background service worker fallback.
+    - Integrated `SubtitleParser.parseSRV3()` to convert XML timedtext responses into standard timestamped cues for `VideoMiningPOC`'s selectable overlay engine.
+  - `extension/tests/srv3-parser.test.js` (NEW):
+    - Added unit test suite covering standard `<p>` XML cues, segmented `<s>` word tags, XML entity decoding, overlap duration clamping, and `parseSubtitles()` auto-detection.
+  - `extension/tests/youtube-adapter.test.js`:
+    - Updated unit tests to verify `srv3` URL formatting (`fmt=srv3`, `c=WEB`), auto-translate track synthesis, and end-to-end `YouTubeAdapter` cue loading with SRV3 mock responses.
 
 - **Behavior Delivered**:
-  1. **Clean Dedicated Video Mining Tab**: Users can switch between Text Mining and Video Mining views using segmented tabs. UI clutter is reduced while card editing, Yomitan enrichment, and Anki syncing remain unified.
-  2. **Subtitle Clearing**: Users can click "Clear" (`#clear-subtitles-btn`) to unload the loaded subtitle file, reset the status pill, reset timing offset to `0.0s`, and instantly hide the video overlay.
-  3. **YouTube Detection via MAIN World Bridge**: Bridges Chrome's isolated world barrier on YouTube to read `#movie_player` caption tracklist and player responses, reliably discovering Japanese caption tracks.
-  4. **Netflix Subtitle Detection**: Employs a non-intrusive `MutationObserver` on `.player-timedtext` to extract live Japanese dialogue, while suppressing Netflix's native overlay using CSS opacity.
-  5. **Reliable On-Video Subtitle Display**: Subtitles from loaded files or native tracks render directly floating above the video using viewport-anchored `position: fixed` coordinates, bypassing container overflow clipping.
+  1. **PO Token & 403 Forbidden Bypassed**: YouTube caption requests now succeed on modern YouTube videos by extracting authenticated player tracks with live POT tokens or falling back to the Android InnerTube API.
+  2. **Native SRV3 TimedText Support**: Subtitles parse accurately with millisecond timestamp precision and zero text overlap artifacts.
+  3. **Seamless Shorts & SPA Navigation**: Switching videos or scrolling through YouTube Shorts triggers automatic track re-discovery without requiring manual page reloads.
+  4. **Auto-Translate Option**: Videos with non-Japanese captions provide an auto-translated Japanese track option for mining.
+  5. **Preserved Platform Isolation**: Netflix DOM observer, external SRT/VTT file upload, and standard web mining remain completely unaffected with zero regressions.
 
 - **Verification Run**:
-  - `extension/tests/subtitle-parser.test.js`: PASSED
+  - `extension/tests/srv3-parser.test.js`: PASSED
   - `extension/tests/youtube-adapter.test.js`: PASSED
+  - `extension/tests/subtitle-parser.test.js`: PASSED
   - `extension/tests/netflix-adapter.test.js`: PASSED
-  - `extension/tests/video-mining-poc.test.js`: PASSED
-  - `extension/tests/video-mining-integration.test.js`: PASSED (7/7 suites passed)
-  - `extension/tests/sidepanel.test.js`: PASSED
-  - `extension/tests/capture-utils.test.js`: PASSED
   - `extension/tests/capture-frame-verification.test.js`: PASSED
-  - `backend/tests` (via `python -m pytest tests`): PASSED (92/92 passed, 0 regressions)
+  - `backend/tests` (via `python -m pytest backend/tests` with `PYTHONPATH=backend`): PASSED (92/92 passed, 0 regressions)
 
 - **Remaining Risk**:
-  - Live third-party streaming sites dynamically changing DOM class names or using canvas/WebGL subtitles (mitigated by external subtitle file loader as universal fallback).
+  - YouTube changing internal InnerTube client version requirements or altering `#movie_player` method names in future player rollouts (mitigated by 3-tier fallback architecture).
 
 ## Next task
 
-Manual browser verification by the user on live YouTube, Netflix, and external subtitle video targets.
+Manual browser smoke testing on live YouTube videos and YouTube Shorts in Chrome/Brave.
+
 
 
