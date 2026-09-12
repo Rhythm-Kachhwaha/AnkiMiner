@@ -292,9 +292,50 @@ Live AnkiConnect and live Yomitan verification passed with clean test cleanup.
 - **Remaining Risk**:
   - YouTube changing internal InnerTube client version requirements or altering `#movie_player` method names in future player rollouts (mitigated by 3-tier fallback architecture).
 
+## Phase 8.1 (Video Mining Controls) — Task 1: Subtitle Navigation Hotkeys
+
+- **Files Changed**:
+  - `extension/content/video-mining-poc.js`:
+    - Added `isEditableTarget(target)` checking `<input>`, `<textarea>`, `<select>`, `[contenteditable]`, and `[role="textbox"]`.
+    - Added `SubtitleHotkeyController` class encapsulating keyboard handling for `A`, `S`, `D`, and `Space`.
+    - Implemented `A` (seek to preceding cue's `startTime`, or last cue before current time if in gap; do nothing at first cue).
+    - Implemented `S` (replay current cue from `startTime`; if in gap, find cue or do nothing).
+    - Implemented `D` (seek to next cue's `startTime`, or next cue after current time if in gap; do nothing at last cue).
+    - Implemented `Space` (toggle active video play/pause, prevent default scrolling, preserving native button activation).
+    - Added subtitle timing offset compensation (`targetTime = Math.max(0, cue.startTime - offset)`).
+    - Guarded against modifier keys (`Ctrl`, `Alt`, `Meta`) and editable element inputs.
+    - Integrated `SubtitleHotkeyController` into `VideoMiningPOC` with clean `attach()` and `detach()` lifecycle.
+    - Updated Netflix adapter callback to store live cues in `syncEngine.cues` and cleared initial hardcoded `TEST_CUES` on Netflix pages.
+    - Exposed `SubtitleHotkeyController` and `isEditableTarget` on `window.__ANKIMINER_VIDEO_POC__`.
+  - `extension/tests/video-mining-integration.test.js`:
+    - Aligned YouTube mock response and URL assertion with `srv3` timedtext format.
+  - `extension/tests/subtitle-hotkeys.test.js` (NEW):
+    - Added comprehensive unit and integration test suite covering `A`/`S`/`D` cue boundary seeking, gap handling, `Space` play/pause toggling, editable elements/inputs protection, modifier keys, YouTube native subtitles, Netflix live subtitles, dynamic video switching, and subtitle timing offsets.
+
+- **Behavior Delivered**:
+  1. **Precise Subtitle Navigation**: Users can instantly navigate between subtitle lines using `A` (previous), `S` (replay), and `D` (next) without taking hands off the keyboard.
+  2. **Play/Pause Toggle**: `Space` toggles the active video without annoying page scroll artifacts.
+  3. **Form & Editor Protection**: Typing inside Side Panel fields, YouTube/Netflix search bars, or web comments never triggers accidental video jumps.
+  4. **Universal Platform Support**: Works identically across external subtitle files (SRT, VTT, ASS, SRV3), YouTube native subtitles, and Netflix live subtitle streams.
+  5. **Preserved Platform Isolation**: Zero regressions on existing Yomitan hover dictionary lookups, card editor, SQLite persistence, and AnkiConnect synchronization.
+
+- **Verification Run**:
+  - `extension/tests/subtitle-hotkeys.test.js`: PASSED
+  - `extension/tests/video-mining-integration.test.js`: PASSED
+  - `extension/tests/video-mining-poc.test.js`: PASSED
+  - `extension/tests/youtube-adapter.test.js`: PASSED
+  - `extension/tests/netflix-adapter.test.js`: PASSED
+  - `extension/tests/srv3-parser.test.js`: PASSED
+  - `extension/tests/subtitle-parser.test.js`: PASSED
+  - `extension/tests/capture-frame-verification.test.js`: PASSED
+  - `extension/tests/capture-utils.test.js`: PASSED
+  - `extension/tests/sidepanel.test.js`: PASSED
+  - Node test suite: 10/10 test files passed (0 failures).
+  - Backend tests (`python -m pytest -o pythonpath=backend backend/tests`): PASSED (92/92 passed, 0 regressions).
+
+- **Remaining Risk**:
+  - Web video players with aggressive custom keyboard trap overlays (mitigated by using capturing phase event listener on `window`).
+
 ## Next task
 
-Manual browser smoke testing on live YouTube videos and YouTube Shorts in Chrome/Brave.
-
-
-
+Phase 8.1 Task 2: Auto-Pause on Subtitle Hover (or next planned task in Phase 8).

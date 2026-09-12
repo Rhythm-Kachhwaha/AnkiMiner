@@ -484,6 +484,240 @@
   }
 
   // -------------------------------------------------------------
+  // Step 4.5: Subtitle Navigation Hotkeys Controller
+  // -------------------------------------------------------------
+  function isEditableTarget(target) {
+    if (!target) return false;
+    if (target.isContentEditable) return true;
+    const tag = (target.tagName || "").toUpperCase();
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+    if (typeof target.getAttribute === "function") {
+      const role = target.getAttribute("role");
+      if (role === "textbox" || role === "combobox" || role === "searchbox") return true;
+      const contentEditable = target.getAttribute("contenteditable");
+      if (contentEditable && contentEditable !== "false") return true;
+    }
+    if (typeof target.closest === "function") {
+      const editableAncestor = target.closest("input, textarea, select, [contenteditable='true'], [contenteditable=''], [role='textbox']");
+      if (editableAncestor) return true;
+    }
+    return false;
+  }
+
+  class SubtitleHotkeyController {
+    constructor({ getVideo, getSyncEngine } = {}) {
+      this.getVideo = typeof getVideo === "function" ? getVideo : () => null;
+      this.getSyncEngine = typeof getSyncEngine === "function" ? getSyncEngine : () => null;
+      this.enabled = true;
+      this._boundKeyDown = this.handleKeyDown.bind(this);
+      this._isAttached = false;
+    }
+
+    attach() {
+      if (this._isAttached) return;
+      if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+        window.addEventListener("keydown", this._boundKeyDown, true);
+        this._isAttached = true;
+      }
+    }
+
+    detach() {
+      if (!this._isAttached) return;
+      if (typeof window !== "undefined" && typeof window.removeEventListener === "function") {
+        window.removeEventListener("keydown", this._boundKeyDown, true);
+        this._isAttached = false;
+      }
+    }
+
+    handleKeyDown(event) {
+      if (!this.enabled) return;
+      if (!event) return;
+
+      // Do not trigger when modifier keys (Ctrl, Alt, Meta) are held down
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+
+      // Do not trigger when typing in editable elements or inputs
+      if (isEditableTarget(event.target)) return;
+      if (typeof document !== "undefined" && isEditableTarget(document.activeElement)) return;
+
+      const video = this.getVideo();
+      if (!video || !video.isConnected) return;
+
+      const key = (event.key || "").toLowerCase();
+      const code = event.code || "";
+
+      if (key === "a") {
+        if (typeof event.preventDefault === "function") event.preventDefault();
+        if (typeof event.stopPropagation === "function") event.stopPropagation();
+        this.previousSubtitle();
+      } else if (key === "s") {
+        if (typeof event.preventDefault === "function") event.preventDefault();
+        if (typeof event.stopPropagation === "function") event.stopPropagation();
+        this.replaySubtitle();
+      } else if (key === "d") {
+        if (typeof event.preventDefault === "function") event.preventDefault();
+        if (typeof event.stopPropagation === "function") event.stopPropagation();
+        this.nextSubtitle();
+      } else if (key === " " || code === "Space") {
+        // If user is focused on a native button, allow normal button click
+        const targetTag = (event.target?.tagName || "").toUpperCase();
+        if (targetTag === "BUTTON") return;
+
+        if (typeof event.preventDefault === "function") event.preventDefault();
+        if (typeof event.stopPropagation === "function") event.stopPropagation();
+        this.togglePlayPause();
+      }
+    }
+
+    getSortedCues() {
+      const syncEngine = this.getSyncEngine();
+      if (!syncEngine || !Array.isArray(syncEngine.cues) || syncEngine.cues.length === 0) {
+        return [];
+      }
+      return [...syncEngine.cues].sort((a, b) => a.startTime - b.startTime);
+    }
+
+    getActiveCue(sortedCues, effectiveTime) {
+      const syncEngine = this.getSyncEngine();
+      if (syncEngine?.currentCue) {
+        return syncEngine.currentCue;
+      }
+      if (syncEngine && typeof syncEngine.findCueAtTime === "function") {
+        const found = syncEngine.findCueAtTime(effectiveTime - (syncEngine.offset || 0));
+        if (found) return found;
+      }
+      for (const cue of sortedCues) {
+        if (effectiveTime >= cue.startTime && effectiveTime < cue.endTime) {
+          return cue;
+        }
+      }
+      return null;
+    }
+
+    previousSubtitle() {
+      const video = this.getVideo();
+      if (!video) return;
+
+      const syncEngine = this.getSyncEngine();
+      const sortedCues = this.getSortedCues();
+      if (sortedCues.length === 0) return;
+
+      const offset = syncEngine?.offset || 0;
+      const effectiveTime = video.currentTime + offset;
+      const activeCue = this.getActiveCue(sortedCues, effectiveTime);
+
+      if (activeCue) {
+        const idx = sortedCues.findIndex(c =>
+          c === activeCue ||
+          (Math.abs(c.startTime - activeCue.startTime) < 0.001 && c.text === activeCue.text)
+        );
+        if (idx > 0) {
+          this.seekToCue(sortedCues[idx - 1]);
+        }
+      } else {
+        let prevCue = null;
+        for (let i = sortedCues.length - 1; i >= 0; i--) {
+          if (sortedCues[i].startTime < effectiveTime - 0.05) {
+            prevCue = sortedCues[i];
+            break;
+          }
+        }
+        if (prevCue) {
+          this.seekToCue(prevCue);
+        }
+      }
+    }
+
+    replaySubtitle() {
+      const video = this.getVideo();
+      if (!video) return;
+
+      const syncEngine = this.getSyncEngine();
+      const sortedCues = this.getSortedCues();
+      const offset = syncEngine?.offset || 0;
+      const effectiveTime = video.currentTime + offset;
+      const activeCue = this.getActiveCue(sortedCues, effectiveTime);
+
+      if (activeCue && typeof activeCue.startTime === "number") {
+        this.seekToCue(activeCue);
+      }
+    }
+
+    nextSubtitle() {
+      const video = this.getVideo();
+      if (!video) return;
+
+      const syncEngine = this.getSyncEngine();
+      const sortedCues = this.getSortedCues();
+      if (sortedCues.length === 0) return;
+
+      const offset = syncEngine?.offset || 0;
+      const effectiveTime = video.currentTime + offset;
+      const activeCue = this.getActiveCue(sortedCues, effectiveTime);
+
+      if (activeCue) {
+        const idx = sortedCues.findIndex(c =>
+          c === activeCue ||
+          (Math.abs(c.startTime - activeCue.startTime) < 0.001 && c.text === activeCue.text)
+        );
+        if (idx >= 0 && idx < sortedCues.length - 1) {
+          this.seekToCue(sortedCues[idx + 1]);
+        }
+      } else {
+        const nextCue = sortedCues.find(c => c.startTime > effectiveTime + 0.05);
+        if (nextCue) {
+          this.seekToCue(nextCue);
+        }
+      }
+    }
+
+    seekToCue(cue) {
+      if (!cue || typeof cue.startTime !== "number") return;
+      const video = this.getVideo();
+      if (!video) return;
+
+      const syncEngine = this.getSyncEngine();
+      const offset = syncEngine?.offset || 0;
+      const targetTime = Math.max(0, cue.startTime - offset);
+
+      if (typeof video.seek === "function") {
+        video.seek(targetTime);
+      } else {
+        video.currentTime = targetTime;
+        try {
+          if (typeof Event === "function") {
+            video.dispatchEvent(new Event("seeked"));
+            video.dispatchEvent(new Event("timeupdate"));
+          } else {
+            video.dispatchEvent({ type: "seeked" });
+            video.dispatchEvent({ type: "timeupdate" });
+          }
+        } catch (_) {}
+      }
+
+      if (syncEngine && typeof syncEngine.sync === "function") {
+        syncEngine.sync();
+      }
+    }
+
+    togglePlayPause() {
+      const video = this.getVideo();
+      if (!video) return;
+
+      try {
+        if (video.paused) {
+          const p = video.play();
+          if (p && typeof p.catch === "function") {
+            p.catch(() => {});
+          }
+        } else {
+          video.pause();
+        }
+      } catch (_) {}
+    }
+  }
+
+  // -------------------------------------------------------------
   // Step 5: Video Mining POC Controller
   // -------------------------------------------------------------
   class VideoMiningPOC {
@@ -500,6 +734,11 @@
       this.activeFilename = "";
       this.ytAdapter = null;
       this.netflixAdapter = null;
+
+      this.hotkeyController = new SubtitleHotkeyController({
+        getVideo: () => this.activeVideo,
+        getSyncEngine: () => this.syncEngine
+      });
 
       // Wire up file drag-and-drop
       this.renderer.onFileDropped = async (file) => {
@@ -601,6 +840,8 @@
         chrome.runtime.onMessage.addListener(this._boundMessageHandler);
       }
 
+      this.hotkeyController.attach();
+
       // Check for YouTube adapter
       const ytMod = typeof YouTubeAdapter !== "undefined"
         ? YouTubeAdapter
@@ -629,14 +870,20 @@
         ? NetflixAdapter
         : (typeof window !== "undefined" ? window.NetflixAdapter : null);
       if (nfMod && typeof nfMod.NetflixAdapter === "function" && nfMod.isNetflixPage()) {
+        this.syncEngine.setCues([]);
         this.netflixAdapter = new nfMod.NetflixAdapter({
           video: this.activeVideo,
           onCue: (cue) => {
             if (cue) {
               this.activeFilename = "Netflix Subtitles (Live)";
+              if (!this.syncEngine.cues.some(c => c.text === cue.text && Math.abs(c.startTime - cue.startTime) < 1.0)) {
+                this.syncEngine.cues.push(cue);
+              }
+              this.syncEngine.currentCue = cue;
               this.renderer.renderCue(cue);
               this.broadcastActiveCue(cue);
             } else {
+              this.syncEngine.currentCue = null;
               this.renderer.renderCue(null);
               this.broadcastActiveCue(null);
             }
@@ -669,6 +916,9 @@
     }
 
     destroy() {
+      if (this.hotkeyController) {
+        this.hotkeyController.detach();
+      }
       if (this.ytAdapter && typeof this.ytAdapter.destroy === "function") {
         this.ytAdapter.destroy();
         this.ytAdapter = null;
@@ -694,6 +944,8 @@
     VideoDetector,
     SubtitleSynchronizer,
     SubtitleOverlayRenderer,
+    SubtitleHotkeyController,
+    isEditableTarget,
     inspectNativeTextTracks
   };
 })();

@@ -28,8 +28,8 @@ function createMockEnvironment({ isYouTube = false, isNetflix = false } = {}) {
           return Promise.resolve({ enabled: true });
         }
         if (msg.type === "FETCH_YOUTUBE_TIMEDTEXT") {
-          const sampleVTT = `WEBVTT\n\n00:00:01.000 --> 00:00:05.000\n約束の場所へ行こう\n`;
-          return Promise.resolve({ ok: true, text: sampleVTT });
+          const sampleSRV3 = `<timedtext format="3"><body><p t="1000" d="4000"><s>約束の場所へ行こう</s></p></body></timedtext>`;
+          return Promise.resolve({ ok: true, text: sampleSRV3 });
         }
         return Promise.resolve({ ok: true });
       },
@@ -468,7 +468,7 @@ async function testYouTubeIntegration() {
   // Verify timedtext was requested
   const timedtextMsg = env.sentMessages.find(m => m.type === "FETCH_YOUTUBE_TIMEDTEXT");
   assert.ok(timedtextMsg, "FETCH_YOUTUBE_TIMEDTEXT message must be sent to background");
-  assert.ok(timedtextMsg.url.includes("&fmt=vtt"), "URL must request WebVTT format");
+  assert.ok(timedtextMsg.url.includes("fmt=srv3"), "URL must request SRV3 format");
 
   // Verify cues loaded from YouTube timedtext
   assert.ok(poc.instance.syncEngine.cues.length > 0, "Cues must be populated from YouTube response");
