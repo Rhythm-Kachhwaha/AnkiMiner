@@ -336,6 +336,33 @@ Live AnkiConnect and live Yomitan verification passed with clean test cleanup.
 - **Remaining Risk**:
   - Web video players with aggressive custom keyboard trap overlays (mitigated by using capturing phase event listener on `window`).
 
+## Phase 8.1 (Video Mining Controls) — Hotkey Compatibility Fix (Netflix Hotkey Suppression)
+
+- **Files Changed**:
+  - `extension/content/video-mining-poc.js`:
+    - Added `isNetflixPlatform()` helper utilizing `NetflixAdapter.isNetflixPage()` with fallback to `location.hostname.includes("netflix.com")`.
+    - Added clean platform guard in `SubtitleHotkeyController.attach()` and `SubtitleHotkeyController.handleKeyDown()` disabling hotkeys entirely on Netflix (`if (isNetflixPlatform()) return;`).
+    - Restored original `netflixAdapter` `onCue` callback so live Netflix subtitle observation/rendering runs without unnecessary state modifications.
+    - Exported `isNetflixPlatform` on `window.__ANKIMINER_VIDEO_POC__`.
+  - `extension/tests/subtitle-hotkeys.test.js`:
+    - Updated environment mock to support explicit HiAnime domain (`hianime.to`).
+    - Explicitly verified HiAnime video player hotkey operations (`A`/`S`/`D`/`Space`).
+    - Updated Netflix test suite to verify AnkiMiner does NOT intercept `A`, `S`, `D`, or `Space` on Netflix (`defaultPrevented === false`, no video state changes), while confirming Netflix subtitle detection and overlay rendering remain 100% operational.
+
+- **Behavior Delivered**:
+  1. **Netflix Compatibility Restored**: Hotkeys `A`, `S`, `D`, and `Space` are never intercepted on Netflix, allowing native Netflix and browser player controls to function completely unimpeded.
+  2. **HiAnime & YouTube Hotkeys Intact**: `A` (previous), `S` (replay), `D` (next), and `Space` (play/pause) continue to work seamlessly on HiAnime and YouTube.
+  3. **Zero Regression on Netflix Subtitle Mining**: Netflix native subtitle detection (`.player-timedtext`), overlay rendering, selectable text, Yomitan lookups, and card saving remain fully active.
+
+- **Verification Run**:
+  - `extension/tests/subtitle-hotkeys.test.js`: PASSED
+  - `extension/tests/video-mining-integration.test.js`: PASSED
+  - `extension/tests/video-mining-poc.test.js`: PASSED
+  - `extension/tests/youtube-adapter.test.js`: PASSED
+  - `extension/tests/netflix-adapter.test.js`: PASSED
+  - All 10 node extension test suites: PASSED (0 failures)
+  - Backend pytest suite: PASSED (92/92 passed, 0 regressions)
+
 ## Next task
 
 Phase 8.1 Task 2: Auto-Pause on Subtitle Hover (or next planned task in Phase 8).

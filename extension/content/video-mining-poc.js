@@ -504,6 +504,19 @@
     return false;
   }
 
+  function isNetflixPlatform() {
+    const nfMod = typeof NetflixAdapter !== "undefined"
+      ? NetflixAdapter
+      : (typeof window !== "undefined" ? window.NetflixAdapter : null);
+    if (nfMod && typeof nfMod.isNetflixPage === "function") {
+      return nfMod.isNetflixPage();
+    }
+    if (typeof location !== "undefined" && location.hostname) {
+      return location.hostname.includes("netflix.com");
+    }
+    return false;
+  }
+
   class SubtitleHotkeyController {
     constructor({ getVideo, getSyncEngine } = {}) {
       this.getVideo = typeof getVideo === "function" ? getVideo : () => null;
@@ -515,6 +528,8 @@
 
     attach() {
       if (this._isAttached) return;
+      // Phase 8.1 subtitle navigation hotkeys disabled on Netflix
+      if (isNetflixPlatform()) return;
       if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
         window.addEventListener("keydown", this._boundKeyDown, true);
         this._isAttached = true;
@@ -531,6 +546,8 @@
 
     handleKeyDown(event) {
       if (!this.enabled) return;
+      // Phase 8.1 subtitle navigation hotkeys disabled on Netflix
+      if (isNetflixPlatform()) return;
       if (!event) return;
 
       // Do not trigger when modifier keys (Ctrl, Alt, Meta) are held down
@@ -870,20 +887,14 @@
         ? NetflixAdapter
         : (typeof window !== "undefined" ? window.NetflixAdapter : null);
       if (nfMod && typeof nfMod.NetflixAdapter === "function" && nfMod.isNetflixPage()) {
-        this.syncEngine.setCues([]);
         this.netflixAdapter = new nfMod.NetflixAdapter({
           video: this.activeVideo,
           onCue: (cue) => {
             if (cue) {
               this.activeFilename = "Netflix Subtitles (Live)";
-              if (!this.syncEngine.cues.some(c => c.text === cue.text && Math.abs(c.startTime - cue.startTime) < 1.0)) {
-                this.syncEngine.cues.push(cue);
-              }
-              this.syncEngine.currentCue = cue;
               this.renderer.renderCue(cue);
               this.broadcastActiveCue(cue);
             } else {
-              this.syncEngine.currentCue = null;
               this.renderer.renderCue(null);
               this.broadcastActiveCue(null);
             }
@@ -946,6 +957,7 @@
     SubtitleOverlayRenderer,
     SubtitleHotkeyController,
     isEditableTarget,
+    isNetflixPlatform,
     inspectNativeTextTracks
   };
 })();

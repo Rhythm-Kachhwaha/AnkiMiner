@@ -13,7 +13,7 @@ const youtubeAdapterSrc = fs.readFileSync(path.resolve(__dirname, "../content/ad
 const netflixAdapterSrc = fs.readFileSync(path.resolve(__dirname, "../content/adapters/netflix-adapter.js"), "utf8");
 const videoMiningSrc = fs.readFileSync(path.resolve(__dirname, "../content/video-mining-poc.js"), "utf8");
 
-function createMockEnvironment({ isYouTube = false, isNetflix = false } = {}) {
+function createMockEnvironment({ isYouTube = false, isNetflix = false, isHiAnime = false } = {}) {
   const sentMessages = [];
   const messageListeners = [];
   const winEventListeners = {};
@@ -177,12 +177,14 @@ function createMockEnvironment({ isYouTube = false, isNetflix = false } = {}) {
   function getPageUrl() {
     if (isYouTube) return "https://www.youtube.com/watch?v=mock123";
     if (isNetflix) return "https://www.netflix.com/watch/mock456";
+    if (isHiAnime) return "https://hianime.to/watch/one-piece-100?ep=1";
     return "https://example.com/anime/ep1";
   }
 
   function getHostname() {
     if (isYouTube) return "www.youtube.com";
     if (isNetflix) return "www.netflix.com";
+    if (isHiAnime) return "hianime.to";
     return "example.com";
   }
 
@@ -290,10 +292,11 @@ function createMockEnvironment({ isYouTube = false, isNetflix = false } = {}) {
 }
 
 // -------------------------------------------------------------
-// Test 1: Hotkey Navigation with External Subtitle Cues (A, S, D)
+// Test 1: Hotkey Navigation with External Subtitle Cues (HiAnime / generic)
 // -------------------------------------------------------------
 async function testSubtitleNavigationHotkeys() {
-  const env = createMockEnvironment();
+  // Explicitly test HiAnime environment
+  const env = createMockEnvironment({ isHiAnime: true });
   const video = new env.MockVideoElement("test-vid");
   env.rootBody.appendChild(video);
 
@@ -510,7 +513,7 @@ async function testYouTubeHotkeyIntegration() {
 }
 
 // -------------------------------------------------------------
-// Test 5: Netflix Subtitles & Live Hotkey Integration
+// Test 5: Netflix Subtitles & Hotkey Suppression (Disabled for Netflix)
 // -------------------------------------------------------------
 async function testNetflixHotkeyIntegration() {
   const env = createMockEnvironment({ isNetflix: true });
@@ -520,40 +523,43 @@ async function testNetflixHotkeyIntegration() {
   const poc = env.vmContext.window.__ANKIMINER_VIDEO_POC__;
   poc.instance.detector.checkVideos();
 
-  // Simulate live cue 1 from Netflix
+  // Verify platform detection identifies Netflix
+  assert.equal(poc.isNetflixPlatform(), true, "Must detect Netflix platform");
+
+  // Load a subtitle cue in syncEngine
+  poc.instance.syncEngine.setCues([
+    { startTime: 10.0, endTime: 15.0, text: "テスト字幕" }
+  ]);
   video.currentTime = 12.0;
+
+  // 1. Verify hotkeys A, S, D, Space are NOT intercepted by AnkiMiner on Netflix
+  const resA = env.dispatchKeyEvent({ key: "a" });
+  assert.equal(resA.defaultPrevented, false, "A must NOT be prevented on Netflix");
+  assert.equal(video.currentTime, 12.0, "A must NOT seek video on Netflix");
+
+  const resS = env.dispatchKeyEvent({ key: "s" });
+  assert.equal(resS.defaultPrevented, false, "S must NOT be prevented on Netflix");
+  assert.equal(video.currentTime, 12.0, "S must NOT seek video on Netflix");
+
+  const resD = env.dispatchKeyEvent({ key: "d" });
+  assert.equal(resD.defaultPrevented, false, "D must NOT be prevented on Netflix");
+  assert.equal(video.currentTime, 12.0, "D must NOT seek video on Netflix");
+
+  const resSpace = env.dispatchKeyEvent({ key: " ", code: "Space" });
+  assert.equal(resSpace.defaultPrevented, false, "Space must NOT be prevented on Netflix");
+  assert.equal(video.paused, true, "Space must NOT toggle video play/pause on Netflix");
+
+  // 2. Verify Netflix subtitle detection, live observation, and rendering remain intact
   poc.instance.netflixAdapter.onCue({
     startTime: 12.0,
     endTime: 16.0,
     text: "Netflixセリフ１"
   });
+  const overlayContainer = env.rootBody.querySelector("#ankiminer-video-overlay-container");
+  assert.ok(overlayContainer, "Overlay container must exist on Netflix");
+  assert.equal(overlayContainer.getAttribute("data-active-cue"), "Netflixセリフ１", "Netflix subtitle rendering must work");
 
-  // Advance video to 14s inside cue 1
-  video.seek(14.0);
-  assert.equal(poc.instance.syncEngine.currentCue?.text, "Netflixセリフ１");
-
-  // Press S -> should replay cue 1
-  env.dispatchKeyEvent({ key: "s" });
-  assert.equal(video.currentTime, 12.0, "S must seek to live Netflix cue startTime");
-
-  // Simulate live cue 2 from Netflix
-  video.currentTime = 20.0;
-  poc.instance.netflixAdapter.onCue({
-    startTime: 20.0,
-    endTime: 24.0,
-    text: "Netflixセリフ２"
-  });
-  video.seek(21.0);
-
-  // Press A -> should seek to preceding Netflix cue (cue 1 at 12s)
-  env.dispatchKeyEvent({ key: "a" });
-  assert.equal(video.currentTime, 12.0, "A must seek to previous Netflix live cue");
-
-  // Press D -> should seek to next Netflix cue (cue 2 at 20s)
-  env.dispatchKeyEvent({ key: "d" });
-  assert.equal(video.currentTime, 20.0, "D must seek to next Netflix live cue");
-
-  console.log("PASS: Netflix live subtitle hotkey workflow verified.");
+  console.log("PASS: Netflix hotkey suppression verified (A/S/D/Space left to player; subtitle mining intact).");
 }
 
 // -------------------------------------------------------------
