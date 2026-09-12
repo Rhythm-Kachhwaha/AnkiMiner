@@ -55,6 +55,7 @@ assert.ok(html.includes('id="offset-reset-btn"'), "Offset reset button must exis
 assert.ok(html.includes('id="offset-plus-btn"'), "Offset plus button must exist");
 assert.ok(html.includes('id="offset-display"'), "Offset display element must exist");
 assert.ok(html.includes('id="video-current-cue-preview"'), "Video current cue preview element must exist");
+assert.ok(html.includes('id="toggle-auto-pause-hover"'), "Auto-pause on subtitle hover toggle must exist");
 assert.ok(html.includes('<script src="../lib/subtitle-parser.js"></script>'), "Subtitle parser script must be loaded in sidepanel");
 
 // Verify default state

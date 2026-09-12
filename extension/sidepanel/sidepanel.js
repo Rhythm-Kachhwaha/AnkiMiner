@@ -75,6 +75,7 @@ const offsetResetBtn = document.querySelector("#offset-reset-btn");
 const offsetPlusBtn = document.querySelector("#offset-plus-btn");
 const offsetDisplay = document.querySelector("#offset-display");
 const videoCurrentCuePreview = document.querySelector("#video-current-cue-preview");
+const toggleAutoPauseHover = document.querySelector("#toggle-auto-pause-hover");
 
 let currentSubtitleOffset = 0.0;
 let loadedSubtitlesFilename = "";
@@ -1061,6 +1062,7 @@ loadDecks().catch(() => {});
 loadModels().catch(() => {});
 loadHistory().catch(() => {});
 loadTabPreference().catch(() => {});
+loadAutoPausePreference().catch(() => {});
 
 // -------------------------------------------------------------
 // Video Mining Logic & Messaging
@@ -1228,6 +1230,46 @@ if (videoTrackSelect) {
       type: "SELECT_YOUTUBE_TRACK",
       trackIndex
     });
+  });
+}
+
+async function loadAutoPausePreference() {
+  try {
+    let autoPause = false;
+    if (typeof chrome !== "undefined" && chrome.storage?.local) {
+      const stored = await chrome.storage.local.get("auto_pause_on_hover");
+      if (typeof stored?.auto_pause_on_hover === "boolean") {
+        autoPause = stored.auto_pause_on_hover;
+      }
+    } else if (typeof localStorage !== "undefined") {
+      const stored = localStorage.getItem("auto_pause_on_hover");
+      if (stored !== null) {
+        autoPause = stored === "true";
+      }
+    }
+    if (toggleAutoPauseHover) {
+      toggleAutoPauseHover.checked = autoPause;
+    }
+  } catch (_) {}
+}
+
+function setAutoPausePreference(enabled) {
+  try {
+    if (typeof chrome !== "undefined" && chrome.storage?.local) {
+      chrome.storage.local.set({ auto_pause_on_hover: enabled });
+    } else if (typeof localStorage !== "undefined") {
+      localStorage.setItem("auto_pause_on_hover", String(enabled));
+    }
+  } catch (_) {}
+  broadcastToActiveVideo({
+    type: "SET_AUTO_PAUSE_ON_HOVER",
+    enabled
+  });
+}
+
+if (toggleAutoPauseHover) {
+  toggleAutoPauseHover.addEventListener("change", (e) => {
+    setAutoPausePreference(Boolean(e.target.checked));
   });
 }
 

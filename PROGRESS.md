@@ -363,6 +363,57 @@ Live AnkiConnect and live Yomitan verification passed with clean test cleanup.
   - All 10 node extension test suites: PASSED (0 failures)
   - Backend pytest suite: PASSED (92/92 passed, 0 regressions)
 
+## Phase 8.2 (Auto-Pause on Subtitle Hover)
+
+- **Files Changed**:
+  - `extension/content/video-mining-poc.js`:
+    - Added `SubtitleAutoPauseController` managing hover lifecycle and video pause/resume orchestration.
+    - Implemented hover pause logic: mouseenter pauses active video ONLY if video is currently playing (`!video.paused`), marking `pausedByHover = true`.
+    - Implemented leave resume logic: mouseleave resumes video ONLY if AnkiMiner paused it because of the hover (`pausedByHover === true`). If the video was already paused before hovering or paused externally, it is NOT resumed.
+    - Implemented 150ms debounce on resume, canceling pending playback if mouse rapidly re-enters, eliminating pause/play flapping and edge jitter during Yomitan dictionary scanning.
+    - Implemented external play tracking: video `play` events reset `pausedByHover = false` so manual player interactions are not overridden.
+    - Enhanced `SubtitleOverlayRenderer`: added `setHoverLocked(locked)` and `pendingCue` management to keep the currently displayed subtitle text stable under cursor if the video timestamp crosses cue boundaries while hovering.
+    - Integrated `autoPauseController` into `VideoMiningPOC`: attaches to active video and overlay element on video detection; reads `"auto_pause_on_hover"` from `chrome.storage.local` (with `localStorage` fallback) on init; listens to storage changes (`chrome.storage.onChanged`) and runtime message `SET_AUTO_PAUSE_ON_HOVER`.
+    - Exported `SubtitleAutoPauseController` on `window.__ANKIMINER_VIDEO_POC__`.
+  - `extension/sidepanel/sidepanel.html`:
+    - Added compact `#toggle-auto-pause-hover` checkbox and label inside `#video-mining-section`.
+  - `extension/sidepanel/sidepanel.css`:
+    - Added styling for `.video-options-row`, `.toggle-control`, `.toggle-checkbox`, and `.toggle-label` consistent with `DESIGN.md` developer-utility dark theme tokens.
+  - `extension/sidepanel/sidepanel.js`:
+    - Added `toggleAutoPauseHover` element reference.
+    - Added `loadAutoPausePreference()` and `setAutoPausePreference(enabled)` using `chrome.storage.local` with fallback to `localStorage` under key `"auto_pause_on_hover"`. Defaults to `false` (OFF).
+    - Integrated preference loading in sidepanel initialization and bound `change` listener.
+  - `extension/tests/sidepanel.test.js`:
+    - Added DOM contract assertion verifying `#toggle-auto-pause-hover` exists in `sidepanel.html`.
+  - `extension/tests/subtitle-auto-pause.test.js` (NEW):
+    - Comprehensive 11-test suite covering: default disabled state (no-op), enabled hover pause / leave resume, video already paused before hover (no auto-resume), external pause/play during hover, rapid in/out flapping debounce, subtitle stability / disappearing cue protection, cue navigation while hovered, dynamic active video switching, multi-platform compatibility (HiAnime, YouTube, Netflix, external SRT/VTT), Phase 8.1 hotkey isolation, Yomitan text selectability / DOM compatibility, and storage/messaging synchronization.
+
+- **Behavior Delivered**:
+  1. **Optional Auto-Pause on Hover**: Video Mining Mode optionally pauses active video when hovering AnkiMiner's Japanese subtitle overlay, allowing comfortable Yomitan dictionary lookups.
+  2. **Safe Resume Rules**: Resume playback ONLY if AnkiMiner paused the video because of the hover. If the video was already paused, or paused externally, playback never auto-resumes.
+  3. **Anti-Flap Debounce**: Rapid mouse in/out movements are debounced by 150ms, preventing browser audio/video play-interruption exceptions.
+  4. **Stable Yomitan Scanning Surface**: The active cue remains visible even if video timestamp reaches cue boundary during pause; DOM remains standard `<span>` without Shadow DOM or Canvas.
+  5. **Phase 8.1 Hotkey Compatibility**: `A`, `S`, `D`, `Space` hotkeys remain fully functional on HiAnime and YouTube, and remain strictly disabled on Netflix.
+  6. **Zero Regression on Existing Features**: Text mining, Yomitan integration, Card Editor, SQLite, and AnkiConnect remain 100% functional.
+
+- **Verification Run**:
+  - `extension/tests/subtitle-auto-pause.test.js`: PASSED
+  - `extension/tests/subtitle-hotkeys.test.js`: PASSED
+  - `extension/tests/sidepanel.test.js`: PASSED
+  - `extension/tests/video-mining-integration.test.js`: PASSED
+  - `extension/tests/video-mining-poc.test.js`: PASSED
+  - `extension/tests/youtube-adapter.test.js`: PASSED
+  - `extension/tests/netflix-adapter.test.js`: PASSED
+  - `extension/tests/srv3-parser.test.js`: PASSED
+  - `extension/tests/subtitle-parser.test.js`: PASSED
+  - `extension/tests/capture-frame-verification.test.js`: PASSED
+  - `extension/tests/capture-utils.test.js`: PASSED
+  - Extension test suite: 11/11 test files passed (0 failures).
+  - Backend pytest suite (`python -m pytest -o pythonpath=backend backend/tests`): PASSED (92/92 passed, 0 regressions).
+
+- **Remaining Risk**:
+  - Web video players that render non-standard custom controls floating directly over the subtitle overlay area (mitigated by z-index: 2147483647 and pointer-events discipline).
+
 ## Next task
 
-Phase 8.1 Task 2: Auto-Pause on Subtitle Hover (or next planned task in Phase 8).
+Phase 8 planned follow-up (e.g. Subtitle Timing Offset Slider / Fine Adjustment or other Phase 8 features).

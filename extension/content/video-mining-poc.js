@@ -235,6 +235,8 @@
       this.video = null;
       this.resizeObserver = null;
       this.onFileDropped = null;
+      this.isHoverLocked = false;
+      this.pendingCue = undefined;
       this._boundUpdatePosition = this.updatePosition.bind(this);
 
       this._boundDragOver = (e) => {
@@ -391,8 +393,27 @@
       }
     }
 
+    setHoverLocked(locked) {
+      this.isHoverLocked = Boolean(locked);
+      if (!this.isHoverLocked && this.pendingCue !== undefined) {
+        const cue = this.pendingCue;
+        this.pendingCue = undefined;
+        this.renderCue(cue);
+      }
+    }
+
     renderCue(cue) {
       if (!this.subtitleEl || !this.container) return;
+      if (this.isHoverLocked) {
+        // If mouse is currently hovering over the subtitle to read/scan it with Yomitan:
+        // If cue is null (e.g. video timestamp barely crossed the end of cue before pause took effect),
+        // keep displaying the current cue text stable under the cursor.
+        if (!cue || !cue.text) {
+          this.pendingCue = null;
+          return;
+        }
+      }
+      this.pendingCue = undefined;
       if (cue && cue.text) {
         this.subtitleEl.textContent = cue.text;
         this.updatePosition();
@@ -408,6 +429,8 @@
     }
 
     unmount() {
+      this.isHoverLocked = false;
+      this.pendingCue = undefined;
       if (this.resizeObserver) {
         this.resizeObserver.disconnect();
         this.resizeObserver = null;
@@ -735,6 +758,175 @@
   }
 
   // -------------------------------------------------------------
+  // Step 4.6: Subtitle Auto-Pause on Hover Controller
+  // -------------------------------------------------------------
+  class SubtitleAutoPauseController {
+    constructor({ getVideo, getRenderer, getSyncEngine } = {}) {
+      this.getVideo = typeof getVideo === "function" ? getVideo : () => null;
+      this.getRenderer = typeof getRenderer === "function" ? getRenderer : () => null;
+      this.getSyncEngine = typeof getSyncEngine === "function" ? getSyncEngine : () => null;
+
+      this.enabled = false;
+      this.isHovering = false;
+      this.pausedByHover = false;
+      this.activeElement = null;
+      this.attachedVideo = null;
+      this._resumeTimeout = null;
+      this.resumeDelayMs = 150;
+
+      this._boundMouseEnter = this.handleMouseEnter.bind(this);
+      this._boundMouseLeave = this.handleMouseLeave.bind(this);
+      this._boundVideoPlay = this.handleVideoPlay.bind(this);
+    }
+
+    setEnabled(enabled) {
+      this.enabled = Boolean(enabled);
+      if (!this.enabled) {
+        this.cancelResume();
+        if (this.pausedByHover) {
+          this.resumePlayback();
+        }
+        this.isHovering = false;
+      }
+    }
+
+    attachOverlay(element) {
+      this.detachOverlay();
+      if (!element || typeof element.addEventListener !== "function") return;
+      this.activeElement = element;
+      this.activeElement.addEventListener("mouseenter", this._boundMouseEnter);
+      this.activeElement.addEventListener("mouseleave", this._boundMouseLeave);
+    }
+
+    detachOverlay() {
+      this.cancelResume();
+      if (this.activeElement && typeof this.activeElement.removeEventListener === "function") {
+        this.activeElement.removeEventListener("mouseenter", this._boundMouseEnter);
+        this.activeElement.removeEventListener("mouseleave", this._boundMouseLeave);
+      }
+      this.activeElement = null;
+      this.isHovering = false;
+      this.pausedByHover = false;
+    }
+
+    attachVideo(video) {
+      if (this.attachedVideo === video) return;
+      this.detachVideo();
+      if (!video || typeof video.addEventListener !== "function") return;
+      this.attachedVideo = video;
+      this.attachedVideo.addEventListener("play", this._boundVideoPlay);
+    }
+
+    detachVideo() {
+      if (this.attachedVideo && typeof this.attachedVideo.removeEventListener === "function") {
+        this.attachedVideo.removeEventListener("play", this._boundVideoPlay);
+      }
+      this.attachedVideo = null;
+      this.cancelResume();
+      this.pausedByHover = false;
+    }
+
+    handleVideoPlay() {
+      this.pausedByHover = false;
+    }
+
+    cancelResume() {
+      if (this._resumeTimeout !== null) {
+        clearTimeout(this._resumeTimeout);
+        this._resumeTimeout = null;
+      }
+    }
+
+    handleMouseEnter() {
+      if (!this.enabled) return;
+
+      this.isHovering = true;
+      this.cancelResume();
+
+      const renderer = this.getRenderer();
+      if (renderer && typeof renderer.setHoverLocked === "function") {
+        renderer.setHoverLocked(true);
+      }
+
+      const video = this.getVideo();
+      if (!video || !video.isConnected || video.ended) {
+        return;
+      }
+
+      // Only pause if the video is currently playing
+      // If already paused, we do NOT take ownership or resume on leave
+      if (!video.paused) {
+        this.pausedByHover = true;
+        try {
+          video.pause();
+        } catch (_) {}
+      }
+    }
+
+    handleMouseLeave() {
+      if (!this.enabled) return;
+
+      this.isHovering = false;
+      this.cancelResume();
+
+      const performResume = () => {
+        this._resumeTimeout = null;
+
+        const renderer = this.getRenderer();
+        if (renderer && typeof renderer.setHoverLocked === "function") {
+          renderer.setHoverLocked(false);
+        }
+
+        const video = this.getVideo();
+        if (!video || !video.isConnected || video.ended) {
+          this.pausedByHover = false;
+          return;
+        }
+
+        // Resume playback ONLY if AnkiMiner paused the video because of the hover
+        if (this.pausedByHover) {
+          this.pausedByHover = false;
+          if (video.paused) {
+            try {
+              const p = video.play();
+              if (p && typeof p.catch === "function") {
+                p.catch(() => {});
+              }
+            } catch (_) {}
+          }
+        }
+      };
+
+      if (this.resumeDelayMs > 0) {
+        this._resumeTimeout = setTimeout(performResume, this.resumeDelayMs);
+      } else {
+        performResume();
+      }
+    }
+
+    resumePlayback() {
+      this.cancelResume();
+      const renderer = this.getRenderer();
+      if (renderer && typeof renderer.setHoverLocked === "function") {
+        renderer.setHoverLocked(false);
+      }
+
+      const video = this.getVideo();
+      if (this.pausedByHover && video && video.isConnected && !video.ended && video.paused) {
+        this.pausedByHover = false;
+        try {
+          const p = video.play();
+          if (p && typeof p.catch === "function") {
+            p.catch(() => {});
+          }
+        } catch (_) {}
+      } else {
+        this.pausedByHover = false;
+      }
+    }
+  }
+
+  // -------------------------------------------------------------
   // Step 5: Video Mining POC Controller
   // -------------------------------------------------------------
   class VideoMiningPOC {
@@ -754,6 +946,12 @@
 
       this.hotkeyController = new SubtitleHotkeyController({
         getVideo: () => this.activeVideo,
+        getSyncEngine: () => this.syncEngine
+      });
+
+      this.autoPauseController = new SubtitleAutoPauseController({
+        getVideo: () => this.activeVideo,
+        getRenderer: () => this.renderer,
         getSyncEngine: () => this.syncEngine
       });
 
@@ -837,6 +1035,11 @@
         sendResponse?.({ ok: true, offset: message.offset });
         return true;
       }
+      if (message?.type === "SET_AUTO_PAUSE_ON_HOVER" && typeof message.enabled === "boolean") {
+        this.autoPauseController.setEnabled(message.enabled);
+        sendResponse?.({ ok: true, enabled: message.enabled });
+        return true;
+      }
       if (message?.type === "GET_VIDEO_STATE") {
         sendResponse?.({
           ok: true,
@@ -844,7 +1047,8 @@
           videoState: this.detector.getVideoState(),
           offset: this.syncEngine.offset,
           cueCount: this.syncEngine.cues.length,
-          activeFilename: this.activeFilename
+          activeFilename: this.activeFilename,
+          autoPauseEnabled: this.autoPauseController.enabled
         });
         return true;
       }
@@ -858,6 +1062,29 @@
       }
 
       this.hotkeyController.attach();
+
+      // Initialize auto-pause preference from storage
+      try {
+        if (typeof chrome !== "undefined" && chrome.storage?.local) {
+          chrome.storage.local.get("auto_pause_on_hover", (result) => {
+            if (typeof result?.auto_pause_on_hover === "boolean") {
+              this.autoPauseController.setEnabled(result.auto_pause_on_hover);
+            }
+          });
+          if (chrome.storage?.onChanged) {
+            chrome.storage.onChanged.addListener((changes, areaName) => {
+              if (areaName === "local" && changes?.auto_pause_on_hover) {
+                this.autoPauseController.setEnabled(Boolean(changes.auto_pause_on_hover.newValue));
+              }
+            });
+          }
+        } else if (typeof localStorage !== "undefined") {
+          const stored = localStorage.getItem("auto_pause_on_hover");
+          if (stored !== null) {
+            this.autoPauseController.setEnabled(stored === "true");
+          }
+        }
+      } catch (_) {}
 
       // Check for YouTube adapter
       const ytMod = typeof YouTubeAdapter !== "undefined"
@@ -908,6 +1135,7 @@
 
     onVideoDetected(video) {
       this.activeVideo = video;
+      this.autoPauseController.attachVideo(video);
       if (this.netflixAdapter && typeof this.netflixAdapter.setVideo === "function") {
         this.netflixAdapter.setVideo(video);
       }
@@ -918,9 +1146,12 @@
           console.log("[AnkiMiner Video POC] Native TextTracks report:", trackReport);
         } catch {}
         this.renderer.mount(video);
+        this.autoPauseController.attachOverlay(this.renderer.subtitleEl);
         this.syncEngine.attach(video);
       } else {
         console.log("[AnkiMiner Video POC] No active video present.");
+        this.autoPauseController.detachOverlay();
+        this.autoPauseController.detachVideo();
         this.syncEngine.detach();
         this.renderer.unmount();
       }
@@ -929,6 +1160,10 @@
     destroy() {
       if (this.hotkeyController) {
         this.hotkeyController.detach();
+      }
+      if (this.autoPauseController) {
+        this.autoPauseController.detachOverlay();
+        this.autoPauseController.detachVideo();
       }
       if (this.ytAdapter && typeof this.ytAdapter.destroy === "function") {
         this.ytAdapter.destroy();
@@ -956,6 +1191,7 @@
     SubtitleSynchronizer,
     SubtitleOverlayRenderer,
     SubtitleHotkeyController,
+    SubtitleAutoPauseController,
     isEditableTarget,
     isNetflixPlatform,
     inspectNativeTextTracks
