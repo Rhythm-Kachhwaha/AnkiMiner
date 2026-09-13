@@ -2,10 +2,10 @@
 
 ## Current status
 
-Phase 8.3 (SUBTITLE SYNCHRONIZATION CONTROLS) is fully implemented and verified (2026-09-13).
+Phase 8 Cleanup (Remove POC Artifacts, HiAnime Fullscreen Subtitle Display Fix, and Inactive Cue Hiding) is fully implemented and verified (2026-09-13).
 All automated backend tests pass (92/92 pytest tests).
-All extension unit, DOM contract, hotkey, auto-pause, and subtitle sync offset tests pass (12/12 node test suites).
-All video mining features (YouTube, Netflix, HiAnime, external files, A/S/D/Space hotkeys, auto-pause on hover) remain fully functional.
+All extension unit, DOM contract, hotkey, auto-pause, subtitle sync offset, and fullscreen adaptation tests pass (12/12 node test suites).
+All video mining features (YouTube, Netflix, HiAnime, external files, A/S/D/Space hotkeys, auto-pause on hover, subtitle offset) remain fully functional.
 
 ## Implemented
 
@@ -493,6 +493,67 @@ All video mining features (YouTube, Netflix, HiAnime, external files, A/S/D/Spac
 
 - **Remaining Risk**:
   - Videos with non-linear drift (variable frame rate desync) where timing drifts progressively across an entire movie; static offset corrects fixed/uniform desync (as intended for Phase 8.3).
+
+## Phase 8 Cleanup (Remove POC Artifacts + Subtitle Display Fixes)
+
+- **Files Changed**:
+  - `extension/content/video-mining-poc.js`:
+    - **Task 1 (Remove all POC/test subtitles)**:
+      - Removed runtime `TEST_CUES` array (`"これはテストです"`, `"字幕が同期されています"`, etc.).
+      - Defaulted `SubtitleSynchronizer` constructor to empty cues array (`cues = []`).
+      - Defaulted `VideoMiningPOC` constructor to instantiate `syncEngine` with empty array `[]`.
+      - Removed `TEST_CUES` export from `window.__ANKIMINER_VIDEO_POC__`.
+      - Ensured application never displays fake/test subtitles when real subtitles are unavailable.
+    - **Task 2 (HiAnime fullscreen external subtitle bug)**:
+      - Added `getFullscreenElement()` supporting vendor prefixes (`document.fullscreenElement`, `webkitFullscreenElement`, `mozFullScreenElement`, `msFullscreenElement`).
+      - Added `getTargetContainer()`: when fullscreen is active, resolves the player container element enclosing the active video (e.g., HiAnime/JWPlayer `.player-container` / `#player`, YouTube `#movie_player`, Netflix `.nf-player-container`) or falls back to `document.body` for normal playback.
+      - Added `ensureMounted()`: checks if `this.container.isConnected` is false (e.g. if the player replaces the DOM container upon entering fullscreen) or if `container.parentElement !== targetContainer`, re-attaching the subtitle overlay to the active target immediately.
+      - Enhanced `updatePosition()`:
+        - In fullscreen: calculates relative video coordinates (`vRect.left - fsRect.left`, `vRect.top - fsRect.top`) to position overlay at 78% video height and centered over the video width using `position: absolute !important`. Correctly handles pillarboxing (4:3) and letterboxing (16:10 / 21:9) across screen resize and aspect-ratio changes.
+        - When exiting fullscreen: safely restores container to `document.body` with `position: fixed !important` positioned over `vRect`.
+        - Dynamically scales font size between 16px and 38px proportional to video width in both fullscreen and windowed modes.
+      - Added layout settling timers (requestAnimationFrame, 100ms, 300ms) and listened to vendor-prefixed `fullscreenchange`, `video.resize`, and `loadedmetadata` events.
+      - Updated `VideoDetector` to listen to `fullscreenchange` so swapped or re-parented video elements are immediately tracked.
+    - **Task 3 (Hide subtitle when nothing is being said)**:
+      - Added `setStyleProperty(el, prop, val, priority)` helper to safely set CSS properties with `!important` priority while remaining compatible with test mock environments.
+      - Updated `renderCue(cue)`:
+        - When `!cue || !cue.text`: immediately empties subtitle text (`this.subtitleEl.textContent = ""`), hides subtitle span (`display: none !important`), and hides overlay container (`display: none !important; visibility: hidden !important; opacity: 0 !important;`).
+        - When `cue && cue.text`: sets text, displays span (`display: inline-block !important`), displays container (`display: flex !important; visibility: visible !important; opacity: 1 !important;`), and updates position.
+      - Updated `SubtitleSynchronizer`:
+        - `setCues(newCues)` and `detach()` call `this.sync(true)` / `this._updateCue(null, true)` with forced dispatch so loading/clearing subtitles or detaching immediately hides any rendered subtitle.
+        - Synchronizer strictly validates timestamps: video currentTime outside active cues returns `null`, hiding the subtitle immediately before, between, and after cue intervals, while respecting Phase 8.3 timing offsets.
+  - `extension/tests/video-mining-poc.test.js`:
+    - Exposed `MockElement` and added `MockElement.prototype.contains(node)` and `mockDocument.fullscreenElement` to DOM mock.
+    - Updated `testCapturePipelineIntegration` to provide its test cue explicitly via `setCues()` instead of relying on deleted dummy POC cues.
+    - Added `testNoDemoSubtitlesWhenEmpty`: verified that with no cues loaded, `syncEngine.cues` is empty, seek to any time has `currentCue === null`, and overlay is empty and hidden.
+    - Added `testHiAnimeFullscreenBehavior`: verified overlay moves to player wrapper in fullscreen with `position: absolute`, updates with currentTime, survives player DOM replacement via `ensureMounted`, and moves back to `document.body` with `position: fixed` upon exit.
+    - Added `testInactiveCueHiding`: verified overlay is hidden before cue start, visible during cue, hidden immediately after cue, hidden in gaps between cues, and respects subtitle offset.
+
+- **Behavior Delivered**:
+  1. **POC Test Subtitles Completely Removed**: Zero fake/dummy cues ("これはテストです", etc.) remain at runtime. With no subtitles loaded, no overlay text is displayed.
+  2. **HiAnime Fullscreen Resolved**: External subtitles remain visible, positioned over the video, interactive for Yomitan, and synchronized when entering/exiting fullscreen on HiAnime.
+  3. **Clean Gap Hiding**: Subtitles disappear completely when nobody is speaking; stale cues and ghost badges are eliminated.
+  4. **Phase 8.1, 8.2, 8.3 Preserved**: YouTube native CC, Netflix live subtitles, A/S/D/Space hotkeys (with Netflix exclusion), hover auto-pause, and subtitle offset synchronization remain 100% functional.
+  5. **Core Text Mining & Persistence Intact**: Yomitan text capture, Card Editor, SQLite persistence, and AnkiConnect sync remain 100% operational.
+
+- **Verification Run**:
+  - `extension/tests/video-mining-poc.test.js`: PASSED
+  - `extension/tests/video-mining-integration.test.js`: PASSED
+  - `extension/tests/subtitle-sync-offset.test.js`: PASSED
+  - `extension/tests/subtitle-hotkeys.test.js`: PASSED
+  - `extension/tests/subtitle-auto-pause.test.js`: PASSED
+  - `extension/tests/youtube-adapter.test.js`: PASSED
+  - `extension/tests/netflix-adapter.test.js`: PASSED
+  - `extension/tests/srv3-parser.test.js`: PASSED
+  - `extension/tests/subtitle-parser.test.js`: PASSED
+  - `extension/tests/capture-frame-verification.test.js`: PASSED
+  - `extension/tests/capture-utils.test.js`: PASSED
+  - `extension/tests/sidepanel.test.js`: PASSED
+  - Node test suite: 12/12 test files passed (0 failures).
+  - Backend pytest suite (`python -m pytest -o pythonpath=backend backend/tests`): PASSED (92/92 passed, 0 regressions).
+
+- **Remaining Risk**:
+  - Custom web players that render video inside a closed Shadow DOM or canvas-based software decoders (mitigated by standard HTML5 video detection and iframe coverage).
 
 ## Next task
 

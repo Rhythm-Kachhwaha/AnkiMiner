@@ -15,19 +15,6 @@
     return;
   }
 
-  // Hardcoded test cues covering ~60 seconds
-  const TEST_CUES = [
-    { startTime: 0,  endTime: 5,  text: "これはテストです" },
-    { startTime: 5,  endTime: 10, text: "字幕が同期されています" },
-    { startTime: 10, endTime: 15, text: "見間違えた" },
-    { startTime: 15, endTime: 22, text: "逃げるな！生きる方が戦いだ！" },
-    { startTime: 22, endTime: 28, text: "今日はいい天気ですね" },
-    { startTime: 28, endTime: 35, text: "日本語の勉強を続けましょう" },
-    { startTime: 35, endTime: 42, text: "アニメを見ながら単語を覚える" },
-    { startTime: 42, endTime: 50, text: "約束の場所へ急いで行こう" },
-    { startTime: 50, endTime: 60, text: "最後まで諦めないで進むんだ" }
-  ];
-
   // -------------------------------------------------------------
   // Step 1: Video Detector
   // -------------------------------------------------------------
@@ -55,6 +42,8 @@
         });
       }
       window.addEventListener("resize", this._boundCheck);
+      document.addEventListener("fullscreenchange", this._boundCheck);
+      document.addEventListener("webkitfullscreenchange", this._boundCheck);
     }
 
     stop() {
@@ -63,6 +52,8 @@
         this.observer = null;
       }
       window.removeEventListener("resize", this._boundCheck);
+      document.removeEventListener("fullscreenchange", this._boundCheck);
+      document.removeEventListener("webkitfullscreenchange", this._boundCheck);
     }
 
     findAllVideos() {
@@ -126,14 +117,14 @@
   // Step 2: Subtitle Synchronizer
   // -------------------------------------------------------------
   class SubtitleSynchronizer {
-    constructor(cues = TEST_CUES, onCueChanged) {
+    constructor(cues = [], onCueChanged) {
       this.cues = Array.isArray(cues) ? cues : [];
       this.onCueChanged = onCueChanged;
       this.currentCue = null;
       this.video = null;
       this.offset = 0.0;
       this.offsetMs = 0;
-      this._boundSync = this.sync.bind(this);
+      this._boundSync = () => this.sync();
       this._rafId = null;
       this._boundRaf = this._rafLoop.bind(this);
     }
@@ -141,7 +132,7 @@
     setCues(newCues) {
       this.cues = Array.isArray(newCues) ? newCues : [];
       this.currentCue = null;
-      this.sync();
+      this.sync(true);
     }
 
     setOffset(offsetSeconds) {
@@ -152,7 +143,7 @@
         this.offset = 0.0;
         this.offsetMs = 0;
       }
-      this.sync();
+      this.sync(true);
     }
 
     setOffsetMs(offsetMs) {
@@ -163,7 +154,7 @@
         this.offsetMs = 0;
         this.offset = 0.0;
       }
-      this.sync();
+      this.sync(true);
     }
 
     getEffectiveCue(cue) {
@@ -184,7 +175,7 @@
       this.video.addEventListener("seeked", this._boundSync);
       this.video.addEventListener("play", this._boundSync);
       this.video.addEventListener("pause", this._boundSync);
-      this.sync();
+      this.sync(true);
       this._startRaf();
     }
 
@@ -197,7 +188,7 @@
         this.video.removeEventListener("pause", this._boundSync);
         this.video = null;
       }
-      this._updateCue(null);
+      this._updateCue(null, true);
     }
 
     _startRaf() {
@@ -240,26 +231,43 @@
       return null;
     }
 
-    sync() {
+    sync(force = false) {
       if (!this.video) {
-        this._updateCue(null);
+        this._updateCue(null, force);
         return;
       }
       const time = this.video.currentTime;
       const matched = this.findCueAtTime(time);
-      this._updateCue(matched);
+      this._updateCue(matched, force);
     }
 
-    _updateCue(cue) {
+    _updateCue(cue, force = false) {
       const prevKey = this.currentCue ? `${this.currentCue.startTime}-${this.currentCue.endTime}-${this.currentCue.text}` : "";
       const newKey = cue ? `${cue.startTime}-${cue.endTime}-${cue.text}` : "";
-      if (prevKey !== newKey) {
+      if (force || prevKey !== newKey) {
         this.currentCue = cue;
         if (typeof this.onCueChanged === "function") {
           this.onCueChanged(cue);
         }
       }
     }
+  }
+
+  function getFullscreenElement() {
+    if (typeof document === "undefined") return null;
+    return document.fullscreenElement ||
+      document.webkitFullscreenElement ||
+      document.mozFullScreenElement ||
+      document.msFullscreenElement ||
+      null;
+  }
+
+  function setStyleProperty(el, prop, val, priority = "") {
+    if (!el || !el.style) return;
+    if (typeof el.style.setProperty === "function") {
+      el.style.setProperty(prop, val, priority);
+    }
+    el.style[prop] = val;
   }
 
   class SubtitleOverlayRenderer {
@@ -272,6 +280,7 @@
       this.isHoverLocked = false;
       this.pendingCue = undefined;
       this._boundUpdatePosition = this.updatePosition.bind(this);
+      this._boundFullscreenChange = this._onFullscreenChange.bind(this);
 
       this._boundDragOver = (e) => {
         e.preventDefault();
@@ -296,6 +305,32 @@
       };
     }
 
+    getTargetContainer() {
+      if (!this.video) return (typeof document !== "undefined" ? document.body : null);
+      const fsEl = getFullscreenElement();
+      if (fsEl) {
+        // Fullscreen container containing the video (HiAnime, YouTube, Netflix player wrappers)
+        if (fsEl !== this.video && typeof fsEl.contains === "function" && fsEl.contains(this.video)) {
+          return fsEl;
+        }
+        // Native video element fullscreened directly
+        if (fsEl === this.video) {
+          return this.video.parentElement || (typeof document !== "undefined" ? document.body : null);
+        }
+        return fsEl;
+      }
+      return (typeof document !== "undefined" ? document.body : null) || this.video.parentElement;
+    }
+
+    ensureMounted() {
+      if (!this.container || !this.video) return;
+      const target = this.getTargetContainer();
+      if (!target) return;
+      if (!this.container.isConnected || this.container.parentElement !== target) {
+        target.appendChild(this.container);
+      }
+    }
+
     mount(video) {
       this.unmount();
       if (!video) return;
@@ -310,7 +345,9 @@
         
         container.style.cssText = [
           "position: fixed !important",
-          "display: flex !important",
+          "display: none !important",
+          "visibility: hidden !important",
+          "opacity: 0 !important",
           "justify-content: center !important",
           "align-items: center !important",
           "pointer-events: none !important",
@@ -326,7 +363,7 @@
         span.id = "ankiminer-video-subtitle";
         span.className = "ankiminer-video-subtitle";
         span.style.cssText = [
-          "display: inline-block !important",
+          "display: none !important",
           "user-select: text !important",
           "-webkit-user-select: text !important",
           "pointer-events: auto !important",
@@ -356,12 +393,7 @@
         this.subtitleEl = container.querySelector("#ankiminer-video-subtitle");
       }
 
-      // Choose mounting parent: fullscreen element or document.body
-      const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
-      const targetParent = fsEl || document.body || video.parentElement;
-      if (targetParent && this.container.parentElement !== targetParent) {
-        targetParent.appendChild(this.container);
-      }
+      this.ensureMounted();
 
       // Attach drag and drop listeners
       if (this.container && typeof this.container.addEventListener === "function") {
@@ -374,6 +406,8 @@
         this.video.addEventListener("dragleave", this._boundDragLeave);
         this.video.addEventListener("drop", this._boundDrop);
         this.video.addEventListener("timeupdate", this._boundUpdatePosition);
+        this.video.addEventListener("resize", this._boundUpdatePosition);
+        this.video.addEventListener("loadedmetadata", this._boundUpdatePosition);
       }
 
       this.updatePosition();
@@ -385,45 +419,66 @@
       }
       window.addEventListener("resize", this._boundUpdatePosition);
       window.addEventListener("scroll", this._boundUpdatePosition, true);
-      document.addEventListener("fullscreenchange", this._boundUpdatePosition);
-      document.addEventListener("webkitfullscreenchange", this._boundUpdatePosition);
+      document.addEventListener("fullscreenchange", this._boundFullscreenChange);
+      document.addEventListener("webkitfullscreenchange", this._boundFullscreenChange);
+      document.addEventListener("mozfullscreenchange", this._boundFullscreenChange);
+      document.addEventListener("MSFullscreenChange", this._boundFullscreenChange);
+    }
+
+    _onFullscreenChange() {
+      this.updatePosition();
+      if (typeof requestAnimationFrame === "function") {
+        requestAnimationFrame(() => this.updatePosition());
+      }
+      setTimeout(() => this.updatePosition(), 100);
+      setTimeout(() => this.updatePosition(), 300);
     }
 
     updatePosition() {
       if (!this.container || !this.video) return;
 
-      const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
-      if (fsEl) {
-        if (!fsEl.contains(this.container)) {
-          fsEl.appendChild(this.container);
-        }
-        this.container.style.position = "absolute";
-        this.container.style.top = "auto";
-        this.container.style.bottom = "8%";
-        this.container.style.left = "0";
-        this.container.style.width = "100%";
-        this.container.style.height = "auto";
+      this.ensureMounted();
+
+      const fsEl = getFullscreenElement();
+      const isFullscreen = Boolean(fsEl);
+      const vRect = typeof this.video.getBoundingClientRect === "function"
+        ? this.video.getBoundingClientRect()
+        : { top: 0, left: 0, width: 0, height: 0 };
+
+      if (vRect.width <= 0 || vRect.height <= 0) return;
+
+      if (isFullscreen && fsEl && fsEl !== this.video && typeof fsEl.contains === "function" && fsEl.contains(this.video)) {
+        const fsRect = typeof fsEl.getBoundingClientRect === "function"
+          ? fsEl.getBoundingClientRect()
+          : { top: 0, left: 0, width: vRect.width, height: vRect.height };
+
+        const relLeft = Math.round(vRect.left - fsRect.left);
+        const relTop = Math.round(vRect.top - fsRect.top);
+        const topOffset = Math.round(relTop + (vRect.height * 0.78));
+
+        setStyleProperty(this.container, "position", "absolute", "important");
+        setStyleProperty(this.container, "top", `${topOffset}px`, "important");
+        setStyleProperty(this.container, "left", `${relLeft}px`, "important");
+        setStyleProperty(this.container, "width", `${Math.round(vRect.width)}px`, "important");
+        setStyleProperty(this.container, "bottom", "auto", "important");
+        setStyleProperty(this.container, "height", "auto", "important");
+        setStyleProperty(this.container, "z-index", "2147483647", "important");
       } else {
-        const targetParent = document.body || this.video.parentElement;
-        if (targetParent && this.container.parentElement !== targetParent) {
-          targetParent.appendChild(this.container);
-        }
+        const topOffset = Math.round(vRect.top + (vRect.height * 0.78));
 
-        const vRect = this.video.getBoundingClientRect();
-        if (vRect.width > 0 && vRect.height > 0) {
-          const topOffset = vRect.top + (vRect.height * 0.78);
-          this.container.style.position = "fixed";
-          this.container.style.top = `${Math.round(topOffset)}px`;
-          this.container.style.left = `${Math.round(vRect.left)}px`;
-          this.container.style.width = `${Math.round(vRect.width)}px`;
-          this.container.style.bottom = "auto";
-          this.container.style.height = "auto";
+        setStyleProperty(this.container, "position", "fixed", "important");
+        setStyleProperty(this.container, "top", `${topOffset}px`, "important");
+        setStyleProperty(this.container, "left", `${Math.round(vRect.left)}px`, "important");
+        setStyleProperty(this.container, "width", `${Math.round(vRect.width)}px`, "important");
+        setStyleProperty(this.container, "bottom", "auto", "important");
+        setStyleProperty(this.container, "height", "auto", "important");
+        setStyleProperty(this.container, "z-index", "2147483647", "important");
+      }
 
-          if (this.subtitleEl) {
-            const baseSize = Math.max(16, Math.min(32, Math.round(vRect.width * 0.035)));
-            this.subtitleEl.style.fontSize = `${baseSize}px`;
-          }
-        }
+      if (this.subtitleEl) {
+        const baseSize = Math.max(16, Math.min(38, Math.round(vRect.width * 0.032)));
+        setStyleProperty(this.subtitleEl, "fontSize", `${baseSize}px`, "important");
+        setStyleProperty(this.subtitleEl, "font-size", `${baseSize}px`, "important");
       }
     }
 
@@ -448,16 +503,21 @@
         }
       }
       this.pendingCue = undefined;
+
       if (cue && cue.text) {
         this.subtitleEl.textContent = cue.text;
-        this.updatePosition();
-        this.container.style.display = "flex";
-        this.container.style.opacity = "1";
+        setStyleProperty(this.subtitleEl, "display", "inline-block", "important");
+        setStyleProperty(this.container, "display", "flex", "important");
+        setStyleProperty(this.container, "opacity", "1", "important");
+        setStyleProperty(this.container, "visibility", "visible", "important");
         this.container.setAttribute("data-active-cue", cue.text);
+        this.updatePosition();
       } else {
         this.subtitleEl.textContent = "";
-        this.container.style.opacity = "0";
-        this.container.style.display = "none";
+        setStyleProperty(this.subtitleEl, "display", "none", "important");
+        setStyleProperty(this.container, "opacity", "0", "important");
+        setStyleProperty(this.container, "visibility", "hidden", "important");
+        setStyleProperty(this.container, "display", "none", "important");
         this.container.removeAttribute("data-active-cue");
       }
     }
@@ -471,8 +531,10 @@
       }
       window.removeEventListener("resize", this._boundUpdatePosition);
       window.removeEventListener("scroll", this._boundUpdatePosition, true);
-      document.removeEventListener("fullscreenchange", this._boundUpdatePosition);
-      document.removeEventListener("webkitfullscreenchange", this._boundUpdatePosition);
+      document.removeEventListener("fullscreenchange", this._boundFullscreenChange);
+      document.removeEventListener("webkitfullscreenchange", this._boundFullscreenChange);
+      document.removeEventListener("mozfullscreenchange", this._boundFullscreenChange);
+      document.removeEventListener("MSFullscreenChange", this._boundFullscreenChange);
 
       if (this.container && typeof this.container.removeEventListener === "function") {
         this.container.removeEventListener("dragover", this._boundDragOver);
@@ -484,6 +546,8 @@
         this.video.removeEventListener("dragleave", this._boundDragLeave);
         this.video.removeEventListener("drop", this._boundDrop);
         this.video.removeEventListener("timeupdate", this._boundUpdatePosition);
+        this.video.removeEventListener("resize", this._boundUpdatePosition);
+        this.video.removeEventListener("loadedmetadata", this._boundUpdatePosition);
       }
 
       if (this.container && this.container.parentElement) {
@@ -1006,7 +1070,7 @@
   class VideoMiningPOC {
     constructor() {
       this.renderer = new SubtitleOverlayRenderer();
-      this.syncEngine = new SubtitleSynchronizer(TEST_CUES, (cue) => {
+      this.syncEngine = new SubtitleSynchronizer([], (cue) => {
         this.renderer.renderCue(cue);
         this.broadcastActiveCue(cue);
       });
@@ -1331,7 +1395,6 @@
 
   window.__ANKIMINER_VIDEO_POC__ = {
     instance: pocInstance,
-    TEST_CUES,
     VideoDetector,
     SubtitleSynchronizer,
     SubtitleOverlayRenderer,

@@ -108,6 +108,16 @@ function createMockDOMEnvironment({ isIframe = false, iframeId = null } = {}) {
 
     getBoundingClientRect() { return this.rect; }
 
+    contains(node) {
+      if (!node) return false;
+      let curr = node;
+      while (curr) {
+        if (curr === this) return true;
+        curr = curr.parentElement;
+      }
+      return false;
+    }
+
     addEventListener(event, handler) {
       if (!this._listeners[event]) this._listeners[event] = [];
       this._listeners[event].push(handler);
@@ -158,6 +168,7 @@ function createMockDOMEnvironment({ isIframe = false, iframeId = null } = {}) {
 
   const mockDocument = {
     body: rootBody,
+    fullscreenElement: null,
     createElement: (tag) => new MockElement(tag),
     getElementById: (id) => {
       if (rootBody.id === id) return rootBody;
@@ -249,6 +260,7 @@ function createMockDOMEnvironment({ isIframe = false, iframeId = null } = {}) {
     sentMessages,
     mockDocument,
     mockWindow,
+    MockElement,
     MockVideoElement,
     rootBody,
     setSelection: (txt) => { currentSelection = txt; },
@@ -398,6 +410,11 @@ async function testCapturePipelineIntegration() {
     poc.instance.detector.checkVideos();
     assert.equal(poc.instance.activeVideo, video);
 
+    // Load explicit test fixture cue
+    poc.instance.syncEngine.setCues([
+      { startTime: 10, endTime: 15, text: "見間違えた" }
+    ]);
+
     // Seek to 12s -> cue "見間違えた"
     video.seek(12.0);
 
@@ -457,12 +474,178 @@ async function testNativeTextTrackInspection() {
   console.log("PASS: Native TextTrack inspection experiment verified.");
 }
 
+// -------------------------------------------------------------
+// Test 7: Zero Demo/Fallback Subtitles When No Cues Loaded
+// -------------------------------------------------------------
+async function testNoDemoSubtitlesWhenEmpty() {
+  const env = createMockDOMEnvironment();
+  const poc = env.context.window.__ANKIMINER_VIDEO_POC__;
+
+  const video = new env.MockVideoElement("test-empty-video");
+  env.rootBody.appendChild(video);
+  poc.instance.detector.checkVideos();
+
+  // Initially syncEngine must have 0 cues
+  assert.equal(poc.instance.syncEngine.cues.length, 0, "Default cues must be empty (no POC dummy cues)");
+
+  const container = env.mockDocument.getElementById("ankiminer-video-overlay-container");
+  const subtitle = env.mockDocument.getElementById("ankiminer-video-subtitle");
+  assert.ok(container, "Container exists");
+
+  // Seek to arbitrary times (0s, 5s, 12s, 30s)
+  for (const t of [0, 2, 5, 12, 30, 50]) {
+    video.seek(t);
+    assert.equal(poc.instance.syncEngine.currentCue, null, `At ${t}s cue must be null`);
+    assert.equal(subtitle.textContent, "", `At ${t}s subtitle text must be empty`);
+    assert.equal(container.style.display, "none", `At ${t}s container must be hidden`);
+    assert.equal(container.getAttribute("data-active-cue"), null);
+  }
+
+  console.log("PASS: Zero demo/fallback subtitles when no cues loaded verified.");
+}
+
+// -------------------------------------------------------------
+// Test 8: HiAnime Fullscreen Overlay Adaptation
+// -------------------------------------------------------------
+async function testHiAnimeFullscreenBehavior() {
+  const env = createMockDOMEnvironment({ isIframe: false });
+  const poc = env.context.window.__ANKIMINER_VIDEO_POC__;
+
+  // HiAnime player DOM structure: player wrapper div containing video
+  const playerWrapper = new env.MockElement("div", "player-container");
+  playerWrapper.rect = { top: 100, left: 50, width: 800, height: 450 };
+  const video = new env.MockVideoElement("hianime-video");
+  video.rect = { top: 100, left: 50, width: 800, height: 450 };
+
+  playerWrapper.appendChild(video);
+  env.rootBody.appendChild(playerWrapper);
+
+  poc.instance.detector.checkVideos();
+  assert.equal(poc.instance.activeVideo, video);
+
+  // Load external subtitle cues
+  poc.instance.syncEngine.setCues([
+    { startTime: 5.0, endTime: 10.0, text: "フルスクリーンテスト" }
+  ]);
+
+  const container = env.mockDocument.getElementById("ankiminer-video-overlay-container");
+  const subtitle = env.mockDocument.getElementById("ankiminer-video-subtitle");
+
+  // Normal playback at 7.0s
+  video.seek(7.0);
+  assert.equal(subtitle.textContent, "フルスクリーンテスト");
+  assert.equal(container.parentElement, env.rootBody, "Normal playback mounts to body");
+  assert.equal(container.style.position, "fixed");
+
+  // Enter Fullscreen on playerWrapper
+  env.mockDocument.fullscreenElement = playerWrapper;
+  env.mockDocument.dispatchEvent({ type: "fullscreenchange" });
+
+  // Assert container followed video into fullscreen element
+  assert.equal(container.parentElement, playerWrapper, "Must attach inside fullscreen container");
+  assert.equal(container.style.position, "absolute", "Must use absolute positioning inside fullscreen container");
+  assert.equal(subtitle.textContent, "フルスクリーンテスト", "Cue remains rendered in fullscreen");
+
+  // Advance time while in fullscreen
+  video.seek(8.0);
+  assert.equal(subtitle.textContent, "フルスクリーンテスト");
+
+  // Simulate player replacement during fullscreen
+  container.parentElement.removeChild(container);
+  assert.equal(container.isConnected, false);
+  poc.instance.renderer.updatePosition();
+  assert.equal(container.parentElement, playerWrapper, "ensureMounted re-attaches container after player DOM replacement");
+  assert.equal(container.isConnected, true);
+
+  // Exit Fullscreen
+  env.mockDocument.fullscreenElement = null;
+  env.mockDocument.dispatchEvent({ type: "fullscreenchange" });
+
+  assert.equal(container.parentElement, env.rootBody, "Exiting fullscreen moves container back to document.body");
+  assert.equal(container.style.position, "fixed", "Exiting fullscreen restores fixed positioning");
+
+  console.log("PASS: HiAnime fullscreen overlay attachment, repositioning, and exit handling verified.");
+}
+
+// -------------------------------------------------------------
+// Test 9: Inactive Subtitle Cue Hiding & Offset Synchronization
+// -------------------------------------------------------------
+async function testInactiveCueHiding() {
+  const env = createMockDOMEnvironment();
+  const poc = env.context.window.__ANKIMINER_VIDEO_POC__;
+
+  const video = new env.MockVideoElement("test-hiding-video");
+  env.rootBody.appendChild(video);
+  poc.instance.detector.checkVideos();
+
+  poc.instance.syncEngine.setCues([
+    { startTime: 10.0, endTime: 12.0, text: "セリフ１" },
+    { startTime: 16.0, endTime: 18.0, text: "セリフ２" }
+  ]);
+
+  const container = env.mockDocument.getElementById("ankiminer-video-overlay-container");
+  const subtitle = env.mockDocument.getElementById("ankiminer-video-subtitle");
+
+  // Before cue 1 (5.0s) -> HIDDEN
+  video.seek(5.0);
+  assert.equal(poc.instance.syncEngine.currentCue, null);
+  assert.equal(subtitle.textContent, "");
+  assert.equal(container.style.display, "none");
+
+  // During cue 1 (10.5s) -> VISIBLE
+  video.seek(10.5);
+  assert.equal(poc.instance.syncEngine.currentCue?.text, "セリフ１");
+  assert.equal(subtitle.textContent, "セリフ１");
+  assert.equal(container.style.display, "flex");
+
+  // After cue 1 / gap (13.0s) -> HIDDEN
+  video.seek(13.0);
+  assert.equal(poc.instance.syncEngine.currentCue, null);
+  assert.equal(subtitle.textContent, "");
+  assert.equal(container.style.display, "none");
+
+  // During cue 2 (17.0s) -> VISIBLE
+  video.seek(17.0);
+  assert.equal(poc.instance.syncEngine.currentCue?.text, "セリフ２");
+  assert.equal(subtitle.textContent, "セリフ２");
+  assert.equal(container.style.display, "flex");
+
+  // After cue 2 (20.0s) -> HIDDEN
+  video.seek(20.0);
+  assert.equal(poc.instance.syncEngine.currentCue, null);
+  assert.equal(subtitle.textContent, "");
+  assert.equal(container.style.display, "none");
+
+  // Test offset (+500ms -> effective interval for cue 1 is [10.5, 12.5])
+  poc.instance.syncEngine.setOffset(0.5);
+
+  // At 10.2s: before 10.5s -> HIDDEN
+  video.seek(10.2);
+  assert.equal(poc.instance.syncEngine.currentCue, null);
+  assert.equal(container.style.display, "none");
+
+  // At 11.0s: within [10.5, 12.5] -> VISIBLE
+  video.seek(11.0);
+  assert.equal(poc.instance.syncEngine.currentCue?.text, "セリフ１");
+  assert.equal(container.style.display, "flex");
+
+  // At 12.6s: after 12.5s -> HIDDEN
+  video.seek(12.6);
+  assert.equal(poc.instance.syncEngine.currentCue, null);
+  assert.equal(container.style.display, "none");
+
+  console.log("PASS: Inactive cue hiding (before, gap, after, with offset) verified.");
+}
+
 (async () => {
   await testVideoDetection();
   await testSubtitleSync();
   await testOverlayRendering();
   await testCapturePipelineIntegration();
   await testNativeTextTrackInspection();
+  await testNoDemoSubtitlesWhenEmpty();
+  await testHiAnimeFullscreenBehavior();
+  await testInactiveCueHiding();
   console.log("\n>>> ALL VIDEO MINING POC AUTOMATED VERIFICATION TESTS PASSED SUCCESSFULLY! <<<\n");
   process.exit(0);
 })();
