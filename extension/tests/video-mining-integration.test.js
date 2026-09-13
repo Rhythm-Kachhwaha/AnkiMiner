@@ -356,27 +356,39 @@ async function testTimingOffset() {
     filename: "test.srt"
   });
 
-  // Video at 9.0s (offset 0.0s -> no cue active)
+  // Video at 9.0s (offset 0.0s -> no cue active since cue is 10.0s to 15.0s)
   video.seek(9.0);
   assert.equal(poc.instance.syncEngine.currentCue, null);
 
-  // Apply +1.5s offset (video 9.0s + 1.5s offset = 10.5s -> cue matches!)
+  // Apply +1.5s offset (Phase 8.3: cues appear later, effective range [11.5s, 16.5s])
   await env.simulateMessage({
     type: "SET_SUBTITLE_OFFSET",
     offset: 1.5
   });
 
   assert.equal(poc.instance.syncEngine.offset, 1.5);
+  assert.equal(poc.instance.syncEngine.offsetMs, 1500);
+
+  // At 10.5s with +1.5s offset, cue is not active yet (effective startTime is 11.5s)
+  video.seek(10.5);
+  assert.equal(poc.instance.syncEngine.currentCue, null);
+
+  // At 12.0s with +1.5s offset, cue is active!
+  video.seek(12.0);
+  assert.equal(poc.instance.syncEngine.currentCue?.text, "オフセットテスト");
+
+  // Apply -2.0s offset (cues appear earlier, effective range [8.0s, 13.0s])
+  await env.simulateMessage({
+    type: "SET_SUBTITLE_OFFSET",
+    offset: -2.0
+  });
+
+  // At 9.0s with -2.0s offset, cue is active earlier!
   video.seek(9.0);
   assert.equal(poc.instance.syncEngine.currentCue?.text, "オフセットテスト");
 
-  // Apply -5.0s offset (video 12.0s - 5.0s = 7.0s -> cue does NOT match)
-  await env.simulateMessage({
-    type: "SET_SUBTITLE_OFFSET",
-    offset: -5.0
-  });
-
-  video.seek(12.0);
+  // At 14.0s with -2.0s offset, cue has already ended (effective endTime is 13.0s)
+  video.seek(14.0);
   assert.equal(poc.instance.syncEngine.currentCue, null);
 
   console.log("PASS: Timing offset formula and real-time adjustment verified.");

@@ -132,6 +132,7 @@
       this.currentCue = null;
       this.video = null;
       this.offset = 0.0;
+      this.offsetMs = 0;
       this._boundSync = this.sync.bind(this);
       this._rafId = null;
       this._boundRaf = this._rafLoop.bind(this);
@@ -144,8 +145,35 @@
     }
 
     setOffset(offsetSeconds) {
-      this.offset = typeof offsetSeconds === "number" ? offsetSeconds : 0.0;
+      if (typeof offsetSeconds === "number" && !isNaN(offsetSeconds)) {
+        this.offset = offsetSeconds;
+        this.offsetMs = Math.round(offsetSeconds * 1000);
+      } else {
+        this.offset = 0.0;
+        this.offsetMs = 0;
+      }
       this.sync();
+    }
+
+    setOffsetMs(offsetMs) {
+      if (typeof offsetMs === "number" && !isNaN(offsetMs)) {
+        this.offsetMs = Math.round(offsetMs);
+        this.offset = this.offsetMs / 1000;
+      } else {
+        this.offsetMs = 0;
+        this.offset = 0.0;
+      }
+      this.sync();
+    }
+
+    getEffectiveCue(cue) {
+      if (!cue) return null;
+      const offset = this.offset || 0;
+      return {
+        ...cue,
+        startTime: cue.startTime + offset,
+        endTime: cue.endTime + offset
+      };
     }
 
     attach(video) {
@@ -197,9 +225,15 @@
     }
 
     findCueAtTime(currentTime) {
-      const effectiveTime = currentTime + this.offset;
+      if (!Array.isArray(this.cues) || this.cues.length === 0) {
+        return null;
+      }
+      // Phase 8.3: Positive offset means cues appear later; negative offset means cues appear earlier.
+      // Effective cue interval: [cue.startTime + offset, cue.endTime + offset]
+      // Video currentTime matches when: cue.startTime <= currentTime - offset < cue.endTime
+      const unshiftedTime = currentTime - (this.offset || 0);
       for (const cue of this.cues) {
-        if (effectiveTime >= cue.startTime && effectiveTime < cue.endTime) {
+        if (unshiftedTime >= cue.startTime && unshiftedTime < cue.endTime) {
           return cue;
         }
       }
@@ -541,9 +575,10 @@
   }
 
   class SubtitleHotkeyController {
-    constructor({ getVideo, getSyncEngine } = {}) {
+    constructor({ getVideo, getSyncEngine, onOffsetChanged } = {}) {
       this.getVideo = typeof getVideo === "function" ? getVideo : () => null;
       this.getSyncEngine = typeof getSyncEngine === "function" ? getSyncEngine : () => null;
+      this.onOffsetChanged = typeof onOffsetChanged === "function" ? onOffsetChanged : null;
       this.enabled = true;
       this._boundKeyDown = this.handleKeyDown.bind(this);
       this._isAttached = false;
@@ -584,6 +619,7 @@
       if (!video || !video.isConnected) return;
 
       const key = (event.key || "").toLowerCase();
+      const rawKey = event.key || "";
       const code = event.code || "";
 
       if (key === "a") {
@@ -606,6 +642,40 @@
         if (typeof event.preventDefault === "function") event.preventDefault();
         if (typeof event.stopPropagation === "function") event.stopPropagation();
         this.togglePlayPause();
+      } else if (rawKey === "[" || code === "BracketLeft") {
+        if (typeof event.preventDefault === "function") event.preventDefault();
+        if (typeof event.stopPropagation === "function") event.stopPropagation();
+        this.adjustOffset(-100);
+      } else if (rawKey === "]" || code === "BracketRight") {
+        if (typeof event.preventDefault === "function") event.preventDefault();
+        if (typeof event.stopPropagation === "function") event.stopPropagation();
+        this.adjustOffset(100);
+      } else if (rawKey === "\\" || code === "Backslash") {
+        if (typeof event.preventDefault === "function") event.preventDefault();
+        if (typeof event.stopPropagation === "function") event.stopPropagation();
+        this.resetOffset();
+      }
+    }
+
+    adjustOffset(deltaMs) {
+      const syncEngine = this.getSyncEngine();
+      if (!syncEngine) return;
+      const currentMs = typeof syncEngine.offsetMs === "number"
+        ? syncEngine.offsetMs
+        : Math.round((syncEngine.offset || 0) * 1000);
+      const newMs = currentMs + deltaMs;
+      syncEngine.setOffsetMs(newMs);
+      if (typeof this.onOffsetChanged === "function") {
+        this.onOffsetChanged(newMs);
+      }
+    }
+
+    resetOffset() {
+      const syncEngine = this.getSyncEngine();
+      if (!syncEngine) return;
+      syncEngine.setOffsetMs(0);
+      if (typeof this.onOffsetChanged === "function") {
+        this.onOffsetChanged(0);
       }
     }
 
@@ -617,17 +687,19 @@
       return [...syncEngine.cues].sort((a, b) => a.startTime - b.startTime);
     }
 
-    getActiveCue(sortedCues, effectiveTime) {
+    getActiveCue(sortedCues, videoTime) {
       const syncEngine = this.getSyncEngine();
+      if (syncEngine && typeof syncEngine.findCueAtTime === "function") {
+        const found = syncEngine.findCueAtTime(videoTime);
+        if (found) return found;
+      }
       if (syncEngine?.currentCue) {
         return syncEngine.currentCue;
       }
-      if (syncEngine && typeof syncEngine.findCueAtTime === "function") {
-        const found = syncEngine.findCueAtTime(effectiveTime - (syncEngine.offset || 0));
-        if (found) return found;
-      }
+      const offset = syncEngine?.offset || 0;
+      const unshiftedTime = videoTime - offset;
       for (const cue of sortedCues) {
-        if (effectiveTime >= cue.startTime && effectiveTime < cue.endTime) {
+        if (unshiftedTime >= cue.startTime && unshiftedTime < cue.endTime) {
           return cue;
         }
       }
@@ -643,8 +715,8 @@
       if (sortedCues.length === 0) return;
 
       const offset = syncEngine?.offset || 0;
-      const effectiveTime = video.currentTime + offset;
-      const activeCue = this.getActiveCue(sortedCues, effectiveTime);
+      const videoTime = video.currentTime;
+      const activeCue = this.getActiveCue(sortedCues, videoTime);
 
       if (activeCue) {
         const idx = sortedCues.findIndex(c =>
@@ -655,9 +727,10 @@
           this.seekToCue(sortedCues[idx - 1]);
         }
       } else {
+        const unshiftedTime = videoTime - offset;
         let prevCue = null;
         for (let i = sortedCues.length - 1; i >= 0; i--) {
-          if (sortedCues[i].startTime < effectiveTime - 0.05) {
+          if (sortedCues[i].startTime < unshiftedTime - 0.05) {
             prevCue = sortedCues[i];
             break;
           }
@@ -674,9 +747,8 @@
 
       const syncEngine = this.getSyncEngine();
       const sortedCues = this.getSortedCues();
-      const offset = syncEngine?.offset || 0;
-      const effectiveTime = video.currentTime + offset;
-      const activeCue = this.getActiveCue(sortedCues, effectiveTime);
+      const videoTime = video.currentTime;
+      const activeCue = this.getActiveCue(sortedCues, videoTime);
 
       if (activeCue && typeof activeCue.startTime === "number") {
         this.seekToCue(activeCue);
@@ -692,8 +764,8 @@
       if (sortedCues.length === 0) return;
 
       const offset = syncEngine?.offset || 0;
-      const effectiveTime = video.currentTime + offset;
-      const activeCue = this.getActiveCue(sortedCues, effectiveTime);
+      const videoTime = video.currentTime;
+      const activeCue = this.getActiveCue(sortedCues, videoTime);
 
       if (activeCue) {
         const idx = sortedCues.findIndex(c =>
@@ -704,7 +776,8 @@
           this.seekToCue(sortedCues[idx + 1]);
         }
       } else {
-        const nextCue = sortedCues.find(c => c.startTime > effectiveTime + 0.05);
+        const unshiftedTime = videoTime - offset;
+        const nextCue = sortedCues.find(c => c.startTime > unshiftedTime + 0.05);
         if (nextCue) {
           this.seekToCue(nextCue);
         }
@@ -718,7 +791,8 @@
 
       const syncEngine = this.getSyncEngine();
       const offset = syncEngine?.offset || 0;
-      const targetTime = Math.max(0, cue.startTime - offset);
+      // Phase 8.3: Effective cue start time in video time is cue.startTime + offset
+      const targetTime = Math.max(0, cue.startTime + offset);
 
       if (typeof video.seek === "function") {
         video.seek(targetTime);
@@ -946,7 +1020,11 @@
 
       this.hotkeyController = new SubtitleHotkeyController({
         getVideo: () => this.activeVideo,
-        getSyncEngine: () => this.syncEngine
+        getSyncEngine: () => this.syncEngine,
+        onOffsetChanged: (offsetMs) => {
+          this.broadcastOffset(offsetMs);
+          this.persistOffset(offsetMs);
+        }
       });
 
       this.autoPauseController = new SubtitleAutoPauseController({
@@ -1006,8 +1084,35 @@
           chrome.runtime.sendMessage({
             type: "SUBTITLE_CUE_CHANGED",
             cue,
-            offset: this.syncEngine.offset
+            offset: this.syncEngine.offset,
+            offsetMs: this.syncEngine.offsetMs
           }).catch(() => {});
+        }
+      } catch (_) {}
+    }
+
+    broadcastOffset(offsetMs) {
+      try {
+        if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+          chrome.runtime.sendMessage({
+            type: "SUBTITLE_OFFSET_CHANGED",
+            offsetMs,
+            offset: offsetMs / 1000
+          }).catch(() => {});
+        }
+      } catch (_) {}
+      this.broadcastActiveCue(this.syncEngine.currentCue);
+    }
+
+    persistOffset(offsetMs) {
+      try {
+        if (typeof chrome !== "undefined" && chrome.storage?.local) {
+          chrome.storage.local.set({ subtitle_timing_offset: offsetMs });
+        }
+      } catch (_) {}
+      try {
+        if (typeof localStorage !== "undefined") {
+          localStorage.setItem("subtitle_timing_offset", String(offsetMs));
         }
       } catch (_) {}
     }
@@ -1022,17 +1127,30 @@
       }
       if (message?.type === "CLEAR_SUBTITLES") {
         this.syncEngine.setCues([]);
-        this.syncEngine.setOffset(0.0);
+        this.syncEngine.setOffsetMs(0);
+        this.persistOffset(0);
         this.activeFilename = "";
         this.renderer.renderCue(null);
         this.broadcastActiveCue(null);
+        this.broadcastOffset(0);
         sendResponse?.({ ok: true });
         return true;
       }
-      if (message?.type === "SET_SUBTITLE_OFFSET" && typeof message.offset === "number") {
-        this.syncEngine.setOffset(message.offset);
-        this.broadcastActiveCue(this.syncEngine.currentCue);
-        sendResponse?.({ ok: true, offset: message.offset });
+      if (message?.type === "SET_SUBTITLE_OFFSET") {
+        let offsetMs = 0;
+        if (typeof message.offsetMs === "number" && !isNaN(message.offsetMs)) {
+          offsetMs = Math.round(message.offsetMs);
+        } else if (typeof message.offset === "number" && !isNaN(message.offset)) {
+          if (message.unit === "ms") {
+            offsetMs = Math.round(message.offset);
+          } else {
+            offsetMs = Math.round(message.offset * 1000);
+          }
+        }
+        this.syncEngine.setOffsetMs(offsetMs);
+        this.persistOffset(offsetMs);
+        this.broadcastOffset(offsetMs);
+        sendResponse?.({ ok: true, offset: offsetMs / 1000, offsetMs });
         return true;
       }
       if (message?.type === "SET_AUTO_PAUSE_ON_HOVER" && typeof message.enabled === "boolean") {
@@ -1046,6 +1164,7 @@
           hasVideo: Boolean(this.activeVideo),
           videoState: this.detector.getVideoState(),
           offset: this.syncEngine.offset,
+          offsetMs: this.syncEngine.offsetMs,
           cueCount: this.syncEngine.cues.length,
           activeFilename: this.activeFilename,
           autoPauseEnabled: this.autoPauseController.enabled
@@ -1062,6 +1181,32 @@
       }
 
       this.hotkeyController.attach();
+
+      // Initialize subtitle timing offset preference from storage
+      try {
+        if (typeof chrome !== "undefined" && chrome.storage?.local) {
+          chrome.storage.local.get("subtitle_timing_offset", (result) => {
+            if (typeof result?.subtitle_timing_offset === "number" && !isNaN(result.subtitle_timing_offset)) {
+              this.syncEngine.setOffsetMs(result.subtitle_timing_offset);
+            }
+          });
+          if (chrome.storage?.onChanged) {
+            chrome.storage.onChanged.addListener((changes, areaName) => {
+              if (areaName === "local" && changes?.subtitle_timing_offset && typeof changes.subtitle_timing_offset.newValue === "number") {
+                this.syncEngine.setOffsetMs(changes.subtitle_timing_offset.newValue);
+              }
+            });
+          }
+        } else if (typeof localStorage !== "undefined") {
+          const stored = localStorage.getItem("subtitle_timing_offset");
+          if (stored !== null) {
+            const parsed = parseInt(stored, 10);
+            if (!isNaN(parsed)) {
+              this.syncEngine.setOffsetMs(parsed);
+            }
+          }
+        }
+      } catch (_) {}
 
       // Initialize auto-pause preference from storage
       try {

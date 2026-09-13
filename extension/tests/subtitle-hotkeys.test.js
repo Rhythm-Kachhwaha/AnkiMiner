@@ -619,21 +619,20 @@ async function testOffsetWithHotkeys() {
   const poc = env.vmContext.window.__ANKIMINER_VIDEO_POC__;
   poc.instance.detector.checkVideos();
 
-  // Cue is at 10.0s, with offset +2.0s:
-  // effectiveTime = currentTime + 2.0s
-  // So cue starts when currentTime = 8.0s (effectiveTime = 10.0s)
+  // Cue is at 10.0s, with offset +2.0s (Phase 8.3: positive offset means cue appears later):
+  // Effective cue range: [10.0 + 2.0, 15.0 + 2.0] = [12.0s, 17.0s]
   poc.instance.syncEngine.setCues([
     { startTime: 10.0, endTime: 15.0, text: "オフセット字幕" }
   ]);
   poc.instance.syncEngine.setOffset(2.0);
 
-  // Current video time at 9.0s -> effectiveTime = 11.0s (inside cue)
-  video.seek(9.0);
+  // Current video time at 13.0s -> inside effective cue range [12.0s, 17.0s]
+  video.seek(13.0);
   assert.equal(poc.instance.syncEngine.currentCue?.text, "オフセット字幕");
 
-  // Press S -> should seek to Math.max(0, startTime - offset) = 10.0 - 2.0 = 8.0s
+  // Press S -> should seek to Math.max(0, startTime + offset) = 10.0 + 2.0 = 12.0s
   env.dispatchKeyEvent({ key: "s" });
-  assert.equal(video.currentTime, 8.0, "Seeking with offset must account for offset");
+  assert.equal(video.currentTime, 12.0, "Seeking with offset must account for offset");
   assert.equal(poc.instance.syncEngine.currentCue?.text, "オフセット字幕");
 
   console.log("PASS: Subtitle timing offset with hotkeys verified.");

@@ -77,6 +77,7 @@ const offsetDisplay = document.querySelector("#offset-display");
 const videoCurrentCuePreview = document.querySelector("#video-current-cue-preview");
 const toggleAutoPauseHover = document.querySelector("#toggle-auto-pause-hover");
 
+let currentSubtitleOffsetMs = 0;
 let currentSubtitleOffset = 0.0;
 let loadedSubtitlesFilename = "";
 let availableCaptionTracks = [];
@@ -712,6 +713,30 @@ document.addEventListener("keydown", event => {
         toggleOptionalBtn.focus();
       }
     }
+    return;
+  }
+
+  // Phase 8.3: Video Mining Mode offset shortcuts in Side Panel
+  if (videoMiningView && !videoMiningView.hidden) {
+    const activeEl = document.activeElement;
+    const isEditable = activeEl && (
+      activeEl.tagName === "INPUT" ||
+      activeEl.tagName === "TEXTAREA" ||
+      activeEl.tagName === "SELECT" ||
+      activeEl.isContentEditable
+    );
+    if (!isEditable && !event.ctrlKey && !event.altKey && !event.metaKey) {
+      if (event.key === "[" || event.code === "BracketLeft") {
+        event.preventDefault();
+        adjustOffset(-100);
+      } else if (event.key === "]" || event.code === "BracketRight") {
+        event.preventDefault();
+        adjustOffset(100);
+      } else if (event.key === "\\" || event.code === "Backslash") {
+        event.preventDefault();
+        resetOffset();
+      }
+    }
   }
 });
 
@@ -1063,16 +1088,61 @@ loadModels().catch(() => {});
 loadHistory().catch(() => {});
 loadTabPreference().catch(() => {});
 loadAutoPausePreference().catch(() => {});
+loadSubtitleOffsetPreference().catch(() => {});
 
 // -------------------------------------------------------------
 // Video Mining Logic & Messaging
 // -------------------------------------------------------------
+function formatOffset(offsetMs) {
+  const ms = Math.round(offsetMs || 0);
+  if (ms === 0) return "0 ms";
+  const sign = ms > 0 ? "+" : "";
+  return `${sign}${ms} ms`;
+}
+
 function updateOffsetDisplay(offset) {
-  currentSubtitleOffset = offset;
-  if (offsetDisplay) {
-    const sign = offset > 0 ? "+" : "";
-    offsetDisplay.textContent = `${sign}${offset.toFixed(1)}s`;
+  let ms = 0;
+  if (typeof offset === "number" && !isNaN(offset)) {
+    if (Math.abs(offset) > 0 && Math.abs(offset) < 20 && !Number.isInteger(offset)) {
+      ms = Math.round(offset * 1000);
+    } else {
+      ms = Math.round(offset);
+    }
   }
+  currentSubtitleOffsetMs = ms;
+  currentSubtitleOffset = ms / 1000;
+  if (offsetDisplay) {
+    offsetDisplay.textContent = formatOffset(currentSubtitleOffsetMs);
+  }
+}
+
+function persistSubtitleOffset(offsetMs) {
+  try {
+    if (typeof chrome !== "undefined" && chrome.storage?.local) {
+      chrome.storage.local.set({ subtitle_timing_offset: offsetMs });
+    } else if (typeof localStorage !== "undefined") {
+      localStorage.setItem("subtitle_timing_offset", String(offsetMs));
+    }
+  } catch (_) {}
+}
+
+async function loadSubtitleOffsetPreference() {
+  try {
+    let offsetMs = 0;
+    if (typeof chrome !== "undefined" && chrome.storage?.local) {
+      const stored = await chrome.storage.local.get("subtitle_timing_offset");
+      if (typeof stored?.subtitle_timing_offset === "number" && !isNaN(stored.subtitle_timing_offset)) {
+        offsetMs = stored.subtitle_timing_offset;
+      }
+    } else if (typeof localStorage !== "undefined") {
+      const stored = localStorage.getItem("subtitle_timing_offset");
+      if (stored !== null) {
+        const parsed = parseInt(stored, 10);
+        if (!isNaN(parsed)) offsetMs = parsed;
+      }
+    }
+    updateOffsetDisplay(offsetMs);
+  } catch (_) {}
 }
 
 async function broadcastToActiveVideo(message) {
@@ -1123,18 +1193,25 @@ async function handleSubtitleFileSelect(file) {
 }
 
 function adjustOffset(delta) {
-  const newOffset = +(currentSubtitleOffset + delta).toFixed(1);
-  updateOffsetDisplay(newOffset);
+  const deltaMs = Math.abs(delta) < 5 && delta !== 0 && !Number.isInteger(delta)
+    ? Math.round(delta * 1000)
+    : Math.round(delta);
+  const newOffsetMs = currentSubtitleOffsetMs + deltaMs;
+  updateOffsetDisplay(newOffsetMs);
+  persistSubtitleOffset(newOffsetMs);
   broadcastToActiveVideo({
     type: "SET_SUBTITLE_OFFSET",
-    offset: newOffset
+    offsetMs: newOffsetMs,
+    offset: newOffsetMs / 1000
   });
 }
 
 function resetOffset() {
-  updateOffsetDisplay(0.0);
+  updateOffsetDisplay(0);
+  persistSubtitleOffset(0);
   broadcastToActiveVideo({
     type: "SET_SUBTITLE_OFFSET",
+    offsetMs: 0,
     offset: 0.0
   });
 }
@@ -1214,10 +1291,10 @@ if (loadSubtitlesBtn && subtitlesFileInput) {
 }
 
 if (offsetMinusBtn) {
-  offsetMinusBtn.addEventListener("click", () => adjustOffset(-0.5));
+  offsetMinusBtn.addEventListener("click", () => adjustOffset(-100));
 }
 if (offsetPlusBtn) {
-  offsetPlusBtn.addEventListener("click", () => adjustOffset(0.5));
+  offsetPlusBtn.addEventListener("click", () => adjustOffset(100));
 }
 if (offsetResetBtn) {
   offsetResetBtn.addEventListener("click", () => resetOffset());
@@ -1293,11 +1370,23 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     sendResponse?.({ok: true});
     return true;
   }
+  if (message?.type === "SUBTITLE_OFFSET_CHANGED") {
+    const offsetVal = typeof message.offsetMs === "number"
+      ? message.offsetMs
+      : (typeof message.offset === "number" ? message.offset * 1000 : 0);
+    updateOffsetDisplay(offsetVal);
+    sendResponse?.({ok: true});
+    return true;
+  }
   if (message?.type === "SUBTITLE_CUE_CHANGED") {
     if (videoCurrentCuePreview) {
       videoCurrentCuePreview.textContent = message.cue?.text || "—";
     }
-    if (typeof message.offset === "number" && message.offset !== currentSubtitleOffset) {
+    if (typeof message.offsetMs === "number") {
+      if (message.offsetMs !== currentSubtitleOffsetMs) {
+        updateOffsetDisplay(message.offsetMs);
+      }
+    } else if (typeof message.offset === "number" && message.offset !== currentSubtitleOffset) {
       updateOffsetDisplay(message.offset);
     }
     sendResponse?.({ok: true});
@@ -1332,6 +1421,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 });
+
+if (typeof chrome !== "undefined" && chrome.storage?.onChanged) {
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName === "local" && changes?.subtitle_timing_offset && typeof changes.subtitle_timing_offset.newValue === "number") {
+      updateOffsetDisplay(changes.subtitle_timing_offset.newValue);
+    }
+  });
+}
 
 chrome.runtime.sendMessage({type: "GET_MINING_MODE"}).then(res => {
   if (res?.enabled) updateMiningUI(true);

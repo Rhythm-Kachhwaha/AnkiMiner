@@ -2,10 +2,10 @@
 
 ## Current status
 
-Phase 7 (MINING HISTORY & CARD LIBRARY) is fully implemented and verified (2026-09-10).
+Phase 8.3 (SUBTITLE SYNCHRONIZATION CONTROLS) is fully implemented and verified (2026-09-13).
 All automated backend tests pass (92/92 pytest tests).
-All extension unit, DOM contract, state machine, and library helper tests pass (2/2 node test suites).
-Live AnkiConnect and live Yomitan verification passed with clean test cleanup.
+All extension unit, DOM contract, hotkey, auto-pause, and subtitle sync offset tests pass (12/12 node test suites).
+All video mining features (YouTube, Netflix, HiAnime, external files, A/S/D/Space hotkeys, auto-pause on hover) remain fully functional.
 
 ## Implemented
 
@@ -411,9 +411,89 @@ Live AnkiConnect and live Yomitan verification passed with clean test cleanup.
   - Extension test suite: 11/11 test files passed (0 failures).
   - Backend pytest suite (`python -m pytest -o pythonpath=backend backend/tests`): PASSED (92/92 passed, 0 regressions).
 
+## Phase 8.3 (Subtitle Synchronization Controls)
+
+- **Files Changed**:
+  - `extension/content/video-mining-poc.js`:
+    - Updated `SubtitleSynchronizer`:
+      - Added `offsetMs = 0` and `offset = 0` (in seconds).
+      - Added `setOffsetMs(ms)` and `setOffset(sec)` keeping milliseconds and seconds in sync.
+      - Added `getEffectiveCue(cue)` computing `{ ...cue, startTime: Math.max(0, cue.startTime + offset), endTime: Math.max(0, cue.endTime + offset) }` without mutating the original cue object.
+      - Implemented `findCueAtTime(currentTime)` using `unshiftedTime = currentTime - offset` such that positive offset causes cues to render *later* in playback, and negative offset causes cues to render *earlier*.
+    - Updated `SubtitleHotkeyController`:
+      - Added `[` (decrease offset by 100 ms).
+      - Added `]` (increase offset by 100 ms).
+      - Added `\` (reset offset immediately to 0 ms).
+      - Guarded against editable elements (`isEditableTarget(e.target)`), modifier keys (`Ctrl`, `Alt`, `Meta`), and disabled entirely on Netflix (`isNetflixPlatform()`).
+      - Updated `seekToCue(cue)` to seek to `Math.max(0, cue.startTime + offset)` (the effective start time).
+      - Updated `getActiveCue()`, `previousSubtitle()`, `replaySubtitle()`, and `nextSubtitle()` to use effective offset timing when navigating between cues.
+    - Updated `VideoMiningPOC`:
+      - Added `broadcastOffset(offsetMs)` notifying Side Panel via `SUBTITLE_OFFSET_CHANGED`.
+      - Added `persistOffset(offsetMs)` saving to `chrome.storage.local` with fallback to `localStorage` under key `"subtitle_timing_offset"`.
+      - Loaded stored `"subtitle_timing_offset"` preference on startup.
+      - Updated message handler to process `SET_SUBTITLE_OFFSET` and `CLEAR_SUBTITLES` without resetting user timing preference.
+  - `extension/sidepanel/sidepanel.html`:
+    - Updated `.video-offset-controls` container:
+      - Formatted label: `<span class="offset-label">Subtitle Offset:</span>`.
+      - Decrement button: `<button type="button" id="offset-minus-btn" class="btn-offset">-100ms</button>`.
+      - Value display / reset button: `<button type="button" id="offset-reset-btn" class="btn-offset-reset" title="Click or press \ to reset offset to 0 ms"><span id="offset-display">0 ms</span></button>`.
+      - Increment button: `<button type="button" id="offset-plus-btn" class="btn-offset">+100ms</button>`.
+  - `extension/sidepanel/sidepanel.css`:
+    - Refined `.btn-offset-reset` with `min-width: 58px` and monospace tabular numbers so formatted offsets (`+300 ms`, `-200 ms`) display stably without layout shifting or text clipping.
+  - `extension/sidepanel/sidepanel.js`:
+    - Added `currentSubtitleOffsetMs = 0`.
+    - Added `formatOffset(offsetMs)` returning `"0 ms"`, `"+X ms"`, or `"-X ms"`.
+    - Added `updateOffsetDisplay(offsetMs)` updating `#offset-display`.
+    - Added `adjustOffset(deltaMs)` sending `SET_SUBTITLE_OFFSET` to active tab and persisting preference.
+    - Added `resetOffset()` resetting offset to 0 ms.
+    - Added Side Panel `keydown` listener handling `[`, `]`, and `\` shortcuts when Video Mining view is active and focus is not on editable elements.
+    - Added runtime listeners for `SUBTITLE_OFFSET_CHANGED` and `SUBTITLE_CUE_CHANGED`.
+    - Added storage listener for `chrome.storage.onChanged` on `"subtitle_timing_offset"`.
+  - `extension/tests/video-mining-integration.test.js`:
+    - Updated `testTimingOffset` to align with the Phase 8.3 specification (positive offset renders cues later).
+  - `extension/tests/subtitle-hotkeys.test.js`:
+    - Updated `testOffsetWithHotkeys` to align with the Phase 8.3 specification.
+  - `extension/tests/subtitle-sync-offset.test.js` (NEW):
+    - Comprehensive 11-test suite covering:
+      1. Default offset (0 ms) rendering and state.
+      2. Keyboard shortcuts `[` (-100ms), `]` (+100ms), `\` (0ms reset).
+      3. Positive offset (+500ms) making cues appear later in playback.
+      4. Negative offset (-500ms) making cues appear earlier in playback.
+      5. Previous/Replay/Next cue navigation with offset seeking to effective start times.
+      6. Hotkey safety on editable elements and modifier keys.
+      7. Netflix platform exclusion for offset hotkeys.
+      8. Edge cases (no cues, NaN safety, negative seek clamping, large offset beyond duration).
+      9. Storage persistence (`subtitle_timing_offset`) and runtime messaging synchronization.
+      10. Side Panel UI contract, button interactions, and format string contracts (`0 ms`, `+300 ms`, `-200 ms`).
+      11. Coexistence with Phase 8.1 hotkeys (`A`/`S`/`D`/`Space`) and Phase 8.2 auto-pause on hover.
+
+- **Behavior Delivered**:
+  1. **Precise Subtitle Synchronization**: Users can adjust subtitle timing in 100 ms increments using `[` and `]` or the Side Panel buttons, and immediately reset to 0 ms with `\`.
+  2. **Consistent Effective Timing**: Positive offset delays cues (`cue.startTime + offset`), negative offset advances cues; active cue detection, subtitle rendering, and cue navigation (`A`/`S`/`D`) all use the effective time consistently.
+  3. **Immutability of Source Cues**: Original subtitle cue timestamps are never mutated; effective times are computed dynamically.
+  4. **Compact Side Panel UI**: Minimalist developer-utility UI with clear feedback (`0 ms`, `+100 ms`, `-200 ms`), accessible tooltips, and click-to-reset.
+  5. **Platform Safety & Netflix Exclusion**: `[`, `]`, and `\` hotkeys are strictly disabled on Netflix, preserving native streaming player keybindings.
+  6. **Zero Regressions**: Text mining, Yomitan hover lookups, Card Editor, SQLite persistence, and AnkiConnect sync remain 100% operational.
+
+- **Verification Run**:
+  - `extension/tests/subtitle-sync-offset.test.js`: PASSED
+  - `extension/tests/subtitle-hotkeys.test.js`: PASSED
+  - `extension/tests/subtitle-auto-pause.test.js`: PASSED
+  - `extension/tests/sidepanel.test.js`: PASSED
+  - `extension/tests/video-mining-integration.test.js`: PASSED
+  - `extension/tests/video-mining-poc.test.js`: PASSED
+  - `extension/tests/youtube-adapter.test.js`: PASSED
+  - `extension/tests/netflix-adapter.test.js`: PASSED
+  - `extension/tests/srv3-parser.test.js`: PASSED
+  - `extension/tests/subtitle-parser.test.js`: PASSED
+  - `extension/tests/capture-frame-verification.test.js`: PASSED
+  - `extension/tests/capture-utils.test.js`: PASSED
+  - Extension test suite: 12/12 test files passed (0 failures).
+  - Backend pytest suite (`python -m pytest -o pythonpath=backend backend/tests`): PASSED (92/92 passed, 0 regressions).
+
 - **Remaining Risk**:
-  - Web video players that render non-standard custom controls floating directly over the subtitle overlay area (mitigated by z-index: 2147483647 and pointer-events discipline).
+  - Videos with non-linear drift (variable frame rate desync) where timing drifts progressively across an entire movie; static offset corrects fixed/uniform desync (as intended for Phase 8.3).
 
 ## Next task
 
-Phase 8 planned follow-up (e.g. Subtitle Timing Offset Slider / Fine Adjustment or other Phase 8 features).
+Phase 8 planned follow-up or user-directed next steps.
