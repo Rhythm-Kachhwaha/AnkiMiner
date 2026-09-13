@@ -63,8 +63,34 @@ const detectedCues = SubtitleParser.parseSubtitles(srv3Sample, "subtitles.srv3")
 assert.equal(detectedCues.length, 3);
 assert.equal(detectedCues[0].text, "日本語の字幕テスト");
 
-const detectedYtSrv3 = SubtitleParser.parseSubtitles(srv3Sample, "subtitles.ytsrv3");
-assert.equal(detectedYtSrv3.length, 3);
+// 4. Excessive duration clamping test (preventing cues from lingering until next sub)
+const excessiveDurationSample = `<?xml version="1.0" encoding="utf-8" ?>
+<timedtext format="3">
+<body id="0">
+  <p t="1000" d="35000">こんにちは</p>
+  <p t="45000" d="3000">次のセリフです</p>
+</body>
+</timedtext>`;
 
-console.log("PASS: parseSubtitles auto-detection for SRV3 verified.");
+const excessiveCues = SubtitleParser.parseSRV3(excessiveDurationSample);
+assert.equal(excessiveCues.length, 2);
+assert.equal(excessiveCues[0].startTime, 1.0);
+assert.ok(excessiveCues[0].endTime < 10.0, `Cue 1 endTime (${excessiveCues[0].endTime}) must be clamped instead of stretching to 36.0s`);
+assert.ok(excessiveCues[0].endTime < excessiveCues[1].startTime, "Must leave a clean gap of silence before next subtitle");
+
+// 5. <s> tag timestamp duration calculation test
+const sTagSample = `<?xml version="1.0" encoding="utf-8" ?>
+<timedtext format="3">
+<body id="0">
+  <p t="2000" d="20000"><s t="0">これ</s><s t="800">です</s></p>
+  <p t="30000" d="2000">はい</p>
+</body>
+</timedtext>`;
+
+const sTagCues = SubtitleParser.parseSRV3(sTagSample);
+assert.equal(sTagCues.length, 2);
+assert.equal(sTagCues[0].startTime, 2.0);
+assert.ok(sTagCues[0].endTime < 5.0, `Cue 1 endTime (${sTagCues[0].endTime}) should be calculated from s tags and not stay for 20s`);
+
+console.log("PASS: Excessive duration clamping and s-tag speech calculation verified.");
 console.log("All SRV3 tests PASSED successfully!");

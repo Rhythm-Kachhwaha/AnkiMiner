@@ -53,7 +53,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .catch(err => sendResponse({ok: false, error: err.message}));
     return true;
   }
-  if (message?.type === "LOAD_SUBTITLE_CUES" || message?.type === "SET_SUBTITLE_OFFSET" || message?.type === "SELECT_YOUTUBE_TRACK") {
+  if (message?.type === "LOAD_SUBTITLE_CUES" || message?.type === "CLEAR_SUBTITLES" || message?.type === "SET_SUBTITLE_OFFSET" || message?.type === "SELECT_YOUTUBE_TRACK") {
+    if (message?.type === "LOAD_SUBTITLE_CUES" && Array.isArray(message.cues)) {
+      try {
+        chrome.storage.local.set({
+          active_subtitle_cues: message.cues,
+          active_subtitle_filename: message.filename || ""
+        });
+      } catch (_) {}
+    } else if (message?.type === "CLEAR_SUBTITLES") {
+      try {
+        chrome.storage.local.remove(["active_subtitle_cues", "active_subtitle_filename"]);
+      } catch (_) {}
+    }
     activeTab().then(tab => {
       if (tab?.id) {
         chrome.tabs.sendMessage(tab.id, message).catch(() => {});

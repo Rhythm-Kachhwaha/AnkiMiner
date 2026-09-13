@@ -1182,6 +1182,14 @@ async function handleSubtitleFileSelect(file) {
       subtitlesFileStatus.title = `${file.name} (${cues.length} cues)`;
     }
     setStatus(`Loaded ${cues.length} subtitle cues from "${file.name}".`);
+    try {
+      if (typeof chrome !== "undefined" && chrome.storage?.local) {
+        chrome.storage.local.set({
+          active_subtitle_cues: cues,
+          active_subtitle_filename: file.name
+        });
+      }
+    } catch (_) {}
     await broadcastToActiveVideo({
       type: "LOAD_SUBTITLE_CUES",
       cues,
@@ -1232,6 +1240,11 @@ async function clearSubtitles() {
     videoTrackSelect.replaceChildren();
   }
   resetOffset();
+  try {
+    if (typeof chrome !== "undefined" && chrome.storage?.local) {
+      chrome.storage.local.remove(["active_subtitle_cues", "active_subtitle_filename"]);
+    }
+  } catch (_) {}
   setStatus("Cleared loaded subtitles.");
   await broadcastToActiveVideo({ type: "CLEAR_SUBTITLES" });
 }

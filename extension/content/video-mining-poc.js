@@ -253,6 +253,31 @@
     }
   }
 
+  // Prevent direct <video> fullscreen isolation so overlays remain visible in the top layer
+  if (typeof HTMLVideoElement !== "undefined" && HTMLVideoElement.prototype) {
+    const origRequestFs = HTMLVideoElement.prototype.requestFullscreen ||
+      HTMLVideoElement.prototype.webkitRequestFullscreen;
+    if (origRequestFs && !HTMLVideoElement.prototype.__ankiminer_fs_hooked__) {
+      HTMLVideoElement.prototype.__ankiminer_fs_hooked__ = true;
+      HTMLVideoElement.prototype.requestFullscreen = function(options) {
+        const container = (this.closest && this.closest(".jwplayer, #player, .video-js, [class*='player'], .html5-video-player, .watch-video")) || this.parentElement;
+        if (container && container !== this && typeof container.requestFullscreen === "function") {
+          return container.requestFullscreen(options);
+        }
+        return origRequestFs.call(this, options);
+      };
+      if (HTMLVideoElement.prototype.webkitRequestFullscreen) {
+        HTMLVideoElement.prototype.webkitRequestFullscreen = function() {
+          const container = (this.closest && this.closest(".jwplayer, #player, .video-js, [class*='player'], .html5-video-player, .watch-video")) || this.parentElement;
+          if (container && container !== this && typeof container.webkitRequestFullscreen === "function") {
+            return container.webkitRequestFullscreen();
+          }
+          return origRequestFs.call(this);
+        };
+      }
+    }
+  }
+
   function getFullscreenElement() {
     if (typeof document === "undefined") return null;
     return document.fullscreenElement ||
@@ -318,6 +343,11 @@
           return this.video.parentElement || (typeof document !== "undefined" ? document.body : null);
         }
         return fsEl;
+      }
+      // Windowed mode: check for player container wrapper
+      const playerWrapper = (this.video.closest && this.video.closest(".jwplayer, #player, .video-js, [class*='player'], .html5-video-player, .watch-video")) || null;
+      if (playerWrapper && typeof playerWrapper.appendChild === "function") {
+        return playerWrapper;
       }
       return (typeof document !== "undefined" ? document.body : null) || this.video.parentElement;
     }
@@ -426,12 +456,27 @@
     }
 
     _onFullscreenChange() {
+      this.ensureMounted();
       this.updatePosition();
       if (typeof requestAnimationFrame === "function") {
         requestAnimationFrame(() => this.updatePosition());
       }
-      setTimeout(() => this.updatePosition(), 100);
-      setTimeout(() => this.updatePosition(), 300);
+      setTimeout(() => {
+        this.ensureMounted();
+        this.updatePosition();
+      }, 50);
+      setTimeout(() => {
+        this.ensureMounted();
+        this.updatePosition();
+      }, 150);
+      setTimeout(() => {
+        this.ensureMounted();
+        this.updatePosition();
+      }, 300);
+      setTimeout(() => {
+        this.ensureMounted();
+        this.updatePosition();
+      }, 600);
     }
 
     updatePosition() {
@@ -439,21 +484,30 @@
 
       this.ensureMounted();
 
-      const fsEl = getFullscreenElement();
-      const isFullscreen = Boolean(fsEl);
       const vRect = typeof this.video.getBoundingClientRect === "function"
         ? this.video.getBoundingClientRect()
         : { top: 0, left: 0, width: 0, height: 0 };
 
       if (vRect.width <= 0 || vRect.height <= 0) return;
 
-      if (isFullscreen && fsEl && fsEl !== this.video && typeof fsEl.contains === "function" && fsEl.contains(this.video)) {
-        const fsRect = typeof fsEl.getBoundingClientRect === "function"
-          ? fsEl.getBoundingClientRect()
+      const target = this.container.parentElement;
+      const isBodyTarget = !target || target === document.body || target === document.documentElement;
+
+      if (!isBodyTarget) {
+        // Ensure non-body target establishes a containing block
+        const targetPos = typeof getComputedStyle === "function"
+          ? getComputedStyle(target).position
+          : (target.style ? target.style.position : "");
+        if (!targetPos || targetPos === "static") {
+          setStyleProperty(target, "position", "relative");
+        }
+
+        const tRect = typeof target.getBoundingClientRect === "function"
+          ? target.getBoundingClientRect()
           : { top: 0, left: 0, width: vRect.width, height: vRect.height };
 
-        const relLeft = Math.round(vRect.left - fsRect.left);
-        const relTop = Math.round(vRect.top - fsRect.top);
+        const relLeft = Math.round(vRect.left - tRect.left);
+        const relTop = Math.round(vRect.top - tRect.top);
         const topOffset = Math.round(relTop + (vRect.height * 0.78));
 
         setStyleProperty(this.container, "position", "absolute", "important");
@@ -476,7 +530,7 @@
       }
 
       if (this.subtitleEl) {
-        const baseSize = Math.max(16, Math.min(38, Math.round(vRect.width * 0.032)));
+        const baseSize = Math.max(16, Math.min(38, Math.round(vRect.height * 0.045)));
         setStyleProperty(this.subtitleEl, "fontSize", `${baseSize}px`, "important");
         setStyleProperty(this.subtitleEl, "font-size", `${baseSize}px`, "important");
       }
@@ -1128,6 +1182,14 @@
           this.syncEngine.setCues(cues);
           this.activeFilename = file.name;
           try {
+            if (typeof chrome !== "undefined" && chrome.storage?.local) {
+              chrome.storage.local.set({
+                active_subtitle_cues: cues,
+                active_subtitle_filename: file.name
+              });
+            }
+          } catch (_) {}
+          try {
             if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
               chrome.runtime.sendMessage({
                 type: "SUBTITLE_FILE_LOADED",
@@ -1185,6 +1247,14 @@
       if (message?.type === "LOAD_SUBTITLE_CUES" && Array.isArray(message.cues)) {
         this.syncEngine.setCues(message.cues);
         if (message.filename) this.activeFilename = message.filename;
+        try {
+          if (typeof chrome !== "undefined" && chrome.storage?.local) {
+            chrome.storage.local.set({
+              active_subtitle_cues: message.cues,
+              active_subtitle_filename: message.filename || ""
+            });
+          }
+        } catch (_) {}
         this.broadcastActiveCue(this.syncEngine.currentCue);
         sendResponse?.({ ok: true, cueCount: message.cues.length });
         return true;
@@ -1194,6 +1264,11 @@
         this.syncEngine.setOffsetMs(0);
         this.persistOffset(0);
         this.activeFilename = "";
+        try {
+          if (typeof chrome !== "undefined" && chrome.storage?.local) {
+            chrome.storage.local.remove(["active_subtitle_cues", "active_subtitle_filename"]);
+          }
+        } catch (_) {}
         this.renderer.renderCue(null);
         this.broadcastActiveCue(null);
         this.broadcastOffset(0);
@@ -1245,6 +1320,35 @@
       }
 
       this.hotkeyController.attach();
+
+      // Initialize active subtitle cues from storage (supports all frames and HiAnime iframes)
+      try {
+        if (typeof chrome !== "undefined" && chrome.storage?.local) {
+          chrome.storage.local.get(["active_subtitle_cues", "active_subtitle_filename"], (result) => {
+            if (Array.isArray(result?.active_subtitle_cues) && result.active_subtitle_cues.length > 0) {
+              this.syncEngine.setCues(result.active_subtitle_cues);
+              if (result.active_subtitle_filename) this.activeFilename = result.active_subtitle_filename;
+              this.broadcastActiveCue(this.syncEngine.currentCue);
+            }
+          });
+          if (chrome.storage?.onChanged) {
+            chrome.storage.onChanged.addListener((changes, areaName) => {
+              if (areaName === "local" && changes?.active_subtitle_cues) {
+                const newCues = Array.isArray(changes.active_subtitle_cues.newValue)
+                  ? changes.active_subtitle_cues.newValue
+                  : [];
+                this.syncEngine.setCues(newCues);
+                if (changes.active_subtitle_filename?.newValue) {
+                  this.activeFilename = changes.active_subtitle_filename.newValue;
+                } else if (newCues.length === 0) {
+                  this.activeFilename = "";
+                }
+                this.broadcastActiveCue(this.syncEngine.currentCue);
+              }
+            });
+          }
+        }
+      } catch (_) {}
 
       // Initialize subtitle timing offset preference from storage
       try {
