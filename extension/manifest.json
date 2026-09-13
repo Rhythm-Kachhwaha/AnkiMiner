@@ -6,12 +6,14 @@
   "permissions": [
     "sidePanel",
     "activeTab",
-    "scripting"
+    "scripting",
+    "tabs"
   ],
   "host_permissions": [
     "http://127.0.0.1:8000/*",
     "*://*.youtube.com/*",
-    "*://*.netflix.com/*"
+    "*://*.netflix.com/*",
+    "<all_urls>"
   ],
   "background": {
     "service_worker": "background.js"
@@ -26,6 +28,7 @@
       ],
       "js": [
         "lib/subtitle-parser.js",
+        "lib/image-cropper.js",
         "content/adapters/youtube-adapter.js",
         "content/adapters/netflix-adapter.js",
         "content/capture-utils.js",

@@ -1243,7 +1243,104 @@
       } catch (_) {}
     }
 
+    async captureCurrentFrame(options = {}) {
+      if (!this.activeVideo || !this.activeVideo.isConnected) {
+        return {
+          ok: false,
+          error: "NO_ACTIVE_VIDEO",
+          message: "No active video element detected"
+        };
+      }
+
+      const rect = typeof this.activeVideo.getBoundingClientRect === "function"
+        ? this.activeVideo.getBoundingClientRect()
+        : null;
+
+      if (!rect || rect.width <= 0 || rect.height <= 0) {
+        return {
+          ok: false,
+          error: "INVALID_VIDEO_RECT",
+          message: "Video dimensions are 0 or not visible"
+        };
+      }
+
+      const cropper = typeof ImageCropper !== "undefined"
+        ? ImageCropper
+        : (typeof window !== "undefined" ? window.ImageCropper : null);
+
+      if (!cropper || typeof cropper.cropVideoFrame !== "function") {
+        return {
+          ok: false,
+          error: "IMAGE_CROPPER_MISSING",
+          message: "ImageCropper utility is not loaded"
+        };
+      }
+
+      let bgResponse;
+      try {
+        if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+          bgResponse = await chrome.runtime.sendMessage({
+            type: "CAPTURE_VIDEO_FRAME",
+            format: options.format || "jpeg",
+            quality: options.quality || 95
+          });
+        }
+      } catch (err) {
+        return {
+          ok: false,
+          error: "CAPTURE_REQUEST_FAILED",
+          message: err?.message || "Failed to communicate with background service worker"
+        };
+      }
+
+      if (!bgResponse?.ok || !bgResponse.dataUrl) {
+        return {
+          ok: false,
+          error: bgResponse?.error || "CAPTURE_FAILED",
+          message: bgResponse?.message || "Failed to capture visible tab"
+        };
+      }
+
+      const dpr = typeof options.devicePixelRatio === "number"
+        ? options.devicePixelRatio
+        : (typeof window !== "undefined" && window.devicePixelRatio) || 1;
+
+      const cropResult = await cropper.cropVideoFrame(bgResponse.dataUrl, rect, {
+        devicePixelRatio: dpr,
+        maxWidth: options.maxWidth || 640,
+        maxHeight: options.maxHeight || 360,
+        quality: options.quality || 0.92,
+        checkDrm: options.checkDrm !== false,
+        loadImage: options.loadImage,
+        createCanvas: options.createCanvas
+      });
+
+      if (cropResult.ok) {
+        try {
+          if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+            chrome.runtime.sendMessage({
+              type: "SCREENSHOT_CAPTURED",
+              dataUrl: cropResult.dataUrl,
+              timestamp: this.activeVideo.currentTime,
+              width: cropResult.width,
+              height: cropResult.height
+            }).catch(() => {});
+          }
+        } catch (_) {}
+      }
+
+      return cropResult;
+    }
+
     handleMessage(message, _sender, sendResponse) {
+      if (message?.type === "TRIGGER_VIDEO_SCREENSHOT") {
+        this.captureCurrentFrame(message.options).then(res => {
+          sendResponse?.(res);
+        }).catch(err => {
+          sendResponse?.({ ok: false, error: err?.message || "SCREENSHOT_FAILED" });
+        });
+        return true;
+      }
       if (message?.type === "LOAD_SUBTITLE_CUES" && Array.isArray(message.cues)) {
         this.syncEngine.setCues(message.cues);
         if (message.filename) this.activeFilename = message.filename;
@@ -1504,6 +1601,7 @@
     SubtitleOverlayRenderer,
     SubtitleHotkeyController,
     SubtitleAutoPauseController,
+    ImageCropper: typeof ImageCropper !== "undefined" ? ImageCropper : (typeof window !== "undefined" ? window.ImageCropper : null),
     isEditableTarget,
     isNetflixPlatform,
     inspectNativeTextTracks

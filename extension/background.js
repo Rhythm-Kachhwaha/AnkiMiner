@@ -53,6 +53,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .catch(err => sendResponse({ok: false, error: err.message}));
     return true;
   }
+  if (message?.type === "CAPTURE_VIDEO_FRAME") {
+    const windowId = sender?.tab?.windowId;
+    const captureOptions = {
+      format: message.format || "jpeg",
+      quality: typeof message.quality === "number" ? message.quality : 95
+    };
+    const capturePromise = (typeof windowId === "number")
+      ? chrome.tabs.captureVisibleTab(windowId, captureOptions)
+      : chrome.tabs.captureVisibleTab(captureOptions);
+
+    capturePromise
+      .then(dataUrl => sendResponse({ ok: true, dataUrl }))
+      .catch(err => {
+        console.error("[AnkiMiner Background] captureVisibleTab failed:", err);
+        sendResponse({ ok: false, error: err?.message || "Failed to capture visible tab" });
+      });
+    return true;
+  }
   if (message?.type === "LOAD_SUBTITLE_CUES" || message?.type === "CLEAR_SUBTITLES" || message?.type === "SET_SUBTITLE_OFFSET" || message?.type === "SELECT_YOUTUBE_TRACK") {
     if (message?.type === "LOAD_SUBTITLE_CUES" && Array.isArray(message.cues)) {
       try {

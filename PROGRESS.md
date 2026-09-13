@@ -2,10 +2,10 @@
 
 ## Current status
 
-Phase 8 Cleanup (Remove POC Artifacts, HiAnime Fullscreen Subtitle Display Fix, and Inactive Cue Hiding) is fully implemented and verified (2026-09-13).
+Video Media Mining — Step 1 (Extension Permissions, Background Screenshot Capture & Canvas Cropper) is fully implemented and verified (2026-09-13).
 All automated backend tests pass (92/92 pytest tests).
-All extension unit, DOM contract, hotkey, auto-pause, subtitle sync offset, and fullscreen adaptation tests pass (12/12 node test suites).
-All video mining features (YouTube, Netflix, HiAnime, external files, A/S/D/Space hotkeys, auto-pause on hover, subtitle offset) remain fully functional.
+All extension unit, DOM contract, hotkey, auto-pause, subtitle sync offset, and screenshot capture tests pass (13/13 node test suites).
+All video mining features (YouTube, Netflix, HiAnime, external files, A/S/D/Space hotkeys, auto-pause on hover, subtitle offset, viewport screenshot capture) remain fully functional.
 
 ## Implemented
 
@@ -555,6 +555,69 @@ All video mining features (YouTube, Netflix, HiAnime, external files, A/S/D/Spac
 - **Remaining Risk**:
   - Custom web players that render video inside a closed Shadow DOM or canvas-based software decoders (mitigated by standard HTML5 video detection and iframe coverage).
 
+## Video Media Mining — Step 1: Background Screenshot Capture & Canvas Cropper
+
+- **Files Changed / Created**:
+  - `extension/manifest.json`:
+    - Added `"tabs"` to `"permissions"` for window resolution and `chrome.tabs.captureVisibleTab`.
+    - Added `"<all_urls>"` to `"host_permissions"` to enable tab capture across streaming platforms.
+    - Registered `"lib/image-cropper.js"` in `content_scripts[0].js` ahead of `video-mining-poc.js`.
+  - `extension/background.js`:
+    - Added runtime message listener for `CAPTURE_VIDEO_FRAME`.
+    - Resolves `sender.tab.windowId` and executes `chrome.tabs.captureVisibleTab` with requested format (default `jpeg`) and quality (default 95).
+    - Returns `{ ok: true, dataUrl }` or `{ ok: false, error }` asynchronously via `sendResponse`.
+  - `extension/lib/image-cropper.js` (NEW):
+    - Standalone image cropper and coordinate transformation utility with universal UMD/CJS export.
+    - `calculateCropBounds(rect, pixelRatio, imageWidth, imageHeight)`: Scales bounding rect coordinates (`left`, `top`, `width`, `height`) by `devicePixelRatio`, clamps to viewport image boundaries, and prevents negative offsets.
+    - `calculateTargetDimensions(sourceWidth, sourceHeight, maxWidth, maxHeight)`: Computes aspect-ratio-preserving downscaled dimensions (default `maxWidth: 640`, `maxHeight: 360`) to keep card file sizes lightweight (~60–100 KB).
+    - `checkBlackFrame(pixelData, width, height)`: Multi-point pixel sampling detecting solid black frames (Widevine DRM blanking on Netflix) or transparent compositor layers.
+    - `cropVideoFrame(viewportDataUrl, rect, options)`: Off-DOM canvas pipeline loading viewport image, cropping video sub-rect, validating DRM status, and exporting clean JPEG data URL.
+  - `extension/content/video-mining-poc.js`:
+    - Added `captureCurrentFrame(options)` method to `VideoMiningPOC`:
+      - Checks `this.activeVideo` presence and connection.
+      - Calculates video bounding rectangle via `getBoundingClientRect()`.
+      - Dispatches `CAPTURE_VIDEO_FRAME` message to background worker.
+      - Crops the resulting frame via `ImageCropper.cropVideoFrame(...)`.
+      - Broadcasts `SCREENSHOT_CAPTURED` with data URL, current timestamp, width, and height via `chrome.runtime.sendMessage`.
+    - Added `TRIGGER_VIDEO_SCREENSHOT` message listener in `handleMessage` allowing external callers (Side Panel) to invoke frame capture on demand.
+    - Exposed `ImageCropper` in `window.__ANKIMINER_VIDEO_POC__`.
+  - `extension/tests/capture-screenshot.test.js` (NEW):
+    - Added comprehensive unit and contract test suite:
+      - Manifest verification for permissions, host_permissions, and content script load order.
+      - `calculateCropBounds` scaling with standard (1.0), HiDPI (2.0), fractional (1.25) pixel ratios, negative coordinate clamping, and boundary containment.
+      - `calculateTargetDimensions` aspect-ratio downscaling for 1080p, 720p, vertical video, and small frames.
+      - `checkBlackFrame` DRM detection for solid black, noise floor black, normal video frames, and transparent frames.
+      - `cropVideoFrame` end-to-end execution with mock image/canvas and DRM error handling.
+      - `background.js` message listener contract for `CAPTURE_VIDEO_FRAME`.
+      - `VideoMiningPOC.captureCurrentFrame` and `TRIGGER_VIDEO_SCREENSHOT` message handler.
+
+- **Behavior Delivered**:
+  1. **CORS Canvas Tainting Eliminated**: Direct canvas video capture errors (`SecurityError`) on streaming sites are completely bypassed using background viewport capture + off-DOM cropping.
+  2. **Device Pixel Ratio & Aspect Ratio Fidelity**: Coordinates scale accurately for HiDPI/Retina screens; frames downscale to compact 640x360 maintaining original aspect ratio.
+  3. **DRM Protected Stream Detection**: Protected streams that render black boxes are detected and report `{ ok: false, error: "DRM_PROTECTED" }` rather than generating corrupted cards.
+  4. **Zero Regressions**: All existing text capture, dictionary lookup, subtitle overlay, navigation hotkeys, auto-pause, and backend persistence/sync features remain 100% operational.
+
+- **Verification Run**:
+  - `extension/tests/capture-screenshot.test.js`: PASSED
+  - `extension/tests/video-mining-poc.test.js`: PASSED
+  - `extension/tests/video-mining-integration.test.js`: PASSED
+  - `extension/tests/subtitle-sync-offset.test.js`: PASSED
+  - `extension/tests/subtitle-hotkeys.test.js`: PASSED
+  - `extension/tests/subtitle-auto-pause.test.js`: PASSED
+  - `extension/tests/youtube-adapter.test.js`: PASSED
+  - `extension/tests/netflix-adapter.test.js`: PASSED
+  - `extension/tests/srv3-parser.test.js`: PASSED
+  - `extension/tests/subtitle-parser.test.js`: PASSED
+  - `extension/tests/capture-frame-verification.test.js`: PASSED
+  - `extension/tests/capture-utils.test.js`: PASSED
+  - `extension/tests/sidepanel.test.js`: PASSED
+  - Node test suite: 13/13 test files passed (0 failures).
+  - Backend pytest suite (`python -m pytest -o pythonpath=backend backend/tests`): PASSED (92/92 passed, 0 regressions).
+
+- **Remaining Risk**:
+  - Browser windows that are fully minimized or occluded when `captureVisibleTab` is called may produce blank captures (mitigated by calling during active mining gestures).
+
 ## Next task
 
-Phase 8 planned follow-up or user-directed next steps.
+Step 2 Prompt: Manifest V3 Offscreen Document Audio Recording Service (`offscreen.html`, `offscreen.js`, `tabCapture.getMediaStreamId`, audio padding start/end, and MediaRecorder `audio/webm`).
+
