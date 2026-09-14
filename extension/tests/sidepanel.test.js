@@ -58,6 +58,23 @@ assert.ok(html.includes('id="video-current-cue-preview"'), "Video current cue pr
 assert.ok(html.includes('id="toggle-auto-pause-hover"'), "Auto-pause on subtitle hover toggle must exist");
 assert.ok(html.includes('<script src="../lib/subtitle-parser.js"></script>'), "Subtitle parser script must be loaded in sidepanel");
 
+// Step 3 & Stage 7: Media Previews (Screenshot & Audio) without manual capture buttons
+assert.ok(html.includes('id="media-preview-container"'), "Media preview container must exist");
+assert.ok(html.includes('id="image-preview-container"'), "Image preview container must exist");
+assert.ok(html.includes('id="image-preview"'), "Image preview element must exist");
+assert.ok(html.includes('id="btn-clear-image"'), "Clear image button must exist");
+assert.ok(html.includes('id="audio-preview-container"'), "Audio preview container must exist");
+assert.ok(html.includes('id="audio-preview"'), "Audio preview element must exist");
+assert.ok(html.includes('id="btn-clear-audio"'), "Clear audio button must exist");
+assert.ok(!html.includes('id="btn-retake-image"'), "Manual retake image button must be removed in Stage 7");
+assert.ok(!html.includes('id="btn-retake-audio"'), "Manual retake audio button must be removed in Stage 7");
+
+// Verify layout reordering: card-editor-section appears BEFORE dictionary-section
+const cardEditorIndex = html.indexOf('id="card-editor-section"');
+const dictSectionIndex = html.indexOf('id="dictionary-section"');
+assert.ok(cardEditorIndex !== -1 && dictSectionIndex !== -1, "Both sections must exist in HTML");
+assert.ok(cardEditorIndex < dictSectionIndex, "Card editor must be positioned above dictionary section");
+
 // Verify default state
 assert.ok(html.includes('<option value="Default">Default</option>'), "Default deck option must exist");
 assert.ok(html.includes('id="sync-anki-btn" class="btn-sync" disabled'), "Sync button should start disabled");

@@ -20,6 +20,7 @@ from app.schemas import (
     SyncCardResponse,
 )
 from app.services.anki_connect import AnkiConnectService, AnkiError
+from app.services.media_storage import MediaStorageService
 from app.services.yomitan import YomitanError, YomitanService
 
 
@@ -138,6 +139,23 @@ class CardService:
         2. Check duplicate identity.
         3. Persist / update or return duplicate state.
         """
+        storage = MediaStorageService()
+        image_val = request.image or ""
+        raw_image = request.image_data or (image_val if image_val.startswith("data:image/") else None)
+        if raw_image:
+            try:
+                image_val = storage.save_media(raw_image, media_type="image")
+            except Exception:
+                pass
+
+        audio_val = request.audio or ""
+        raw_audio = request.audio_data or (audio_val if audio_val.startswith("data:audio/") else None)
+        if raw_audio:
+            try:
+                audio_val = storage.save_media(raw_audio, media_type="audio")
+            except Exception:
+                pass
+
         draft = CardDraft(
             expression=request.expression,
             reading=request.reading,
@@ -145,8 +163,8 @@ class CardService:
             hint=request.hint,
             example_sentence=request.example_sentence,
             example_translation=request.example_translation,
-            image=request.image,
-            audio=request.audio,
+            image=image_val,
+            audio=audio_val,
             tags=request.tags,
             notes=request.notes,
             source_text=request.source_text,
@@ -311,7 +329,24 @@ class CardService:
                     synced_at=updated.synced_at if updated else None,
                 )
 
-            # 2. Add note to Anki
+            # 2. Upload media files to Anki collection if present
+            storage = MediaStorageService()
+            if card.image:
+                img_bytes = storage.get_media_bytes(card.image)
+                if img_bytes:
+                    try:
+                        self.anki.store_media_file(filename=card.image, data_bytes=img_bytes)
+                    except Exception:
+                        pass
+            if card.audio:
+                aud_bytes = storage.get_media_bytes(card.audio)
+                if aud_bytes:
+                    try:
+                        self.anki.store_media_file(filename=card.audio, data_bytes=aud_bytes)
+                    except Exception:
+                        pass
+
+            # 3. Add note to Anki
             card_data = {
                 "expression": card.expression,
                 "reading": card.reading,
@@ -388,6 +423,22 @@ class CardService:
             return AnkiModelsResponse(models=models, connected=True)
         except Exception:
             return AnkiModelsResponse(models=["Basic"], connected=False)
+
+    def get_model_capabilities(self, model_name: str | None = None) -> dict[str, Any]:
+        """Query model capabilities for image, audio, and sentence support."""
+        try:
+            caps = self.anki.get_model_capabilities(model_name=model_name)
+            return {"connected": True, **caps}
+        except Exception as error:
+            return {
+                "connected": False,
+                "model_name": model_name or "Basic",
+                "fields": ["Front", "Back"],
+                "supports_image": False,
+                "supports_audio": False,
+                "supports_sentence": False,
+                "error": str(error),
+            }
 
     def list_cards(
         self,

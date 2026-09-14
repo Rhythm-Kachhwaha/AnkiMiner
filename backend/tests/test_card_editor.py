@@ -321,6 +321,27 @@ class CardEditorTests(unittest.TestCase):
         repo = CardRepository(self.db_path)
         self.assertEqual(repo.count(), 0)
 
+    # 14. Media payload and data URL support in SaveCardRequest
+    def test_14_media_payload_and_data_url_support(self):
+        long_data_url = "data:image/jpeg;base64," + ("A" * 5000)
+        audio_data_url = "data:audio/webm;base64," + ("B" * 5000)
+        payload = {
+            "expression": "画像テスト",
+            "reading": "がぞうテスト",
+            "meaning": "image test",
+            "image": long_data_url,
+            "audio": audio_data_url,
+            "image_data": long_data_url,
+            "audio_data": audio_data_url,
+            "media_mime_type": "audio/webm",
+        }
+        res = self.client.post("/api/cards/save", json=payload)
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertTrue(data["is_new"])
+        self.assertTrue(data["image"].startswith("ankiminer_img_"))
+        self.assertTrue(data["audio"].startswith("ankiminer_audio_"))
+
 
 if __name__ == "__main__":
     unittest.main()

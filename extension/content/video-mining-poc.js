@@ -245,6 +245,9 @@
       const prevKey = this.currentCue ? `${this.currentCue.startTime}-${this.currentCue.endTime}-${this.currentCue.text}` : "";
       const newKey = cue ? `${cue.startTime}-${cue.endTime}-${cue.text}` : "";
       if (force || prevKey !== newKey) {
+        if (cue) {
+          this.lastActiveCue = cue;
+        }
         this.currentCue = cue;
         if (typeof this.onCueChanged === "function") {
           this.onCueChanged(cue);
@@ -295,6 +298,77 @@
     el.style[prop] = val;
   }
 
+  function isJapaneseChar(ch) {
+    if (!ch) return false;
+    const code = ch.charCodeAt(0);
+    return (
+      (code >= 0x3040 && code <= 0x309F) || // Hiragana
+      (code >= 0x30A0 && code <= 0x30FF) || // Katakana
+      (code >= 0x4E00 && code <= 0x9FAF) || // CJK Unified Ideographs (Kanji)
+      (code >= 0x3400 && code <= 0x4DBF) || // CJK Extension A
+      (code >= 0xFF66 && code <= 0xFF9F)    // Half-width Katakana
+    );
+  }
+
+  function extractJapaneseWordAtPosition(element, clientX, clientY) {
+    if (!element) return null;
+
+    let range = null;
+    if (typeof document !== "undefined") {
+      if (typeof document.caretRangeFromPoint === "function" && typeof clientX === "number" && typeof clientY === "number") {
+        range = document.caretRangeFromPoint(clientX, clientY);
+      } else if (typeof document.caretPositionFromPoint === "function" && typeof clientX === "number" && typeof clientY === "number") {
+        const pos = document.caretPositionFromPoint(clientX, clientY);
+        if (pos && pos.offsetNode) {
+          range = document.createRange();
+          range.setStart(pos.offsetNode, pos.offset);
+          range.collapse(true);
+        }
+      }
+    }
+
+    if (!range) {
+      const fullText = (element.textContent || "").trim();
+      if (fullText && typeof AnkiMinerCapture !== "undefined" && AnkiMinerCapture.containsJapanese(fullText)) {
+        return fullText;
+      }
+      return null;
+    }
+
+    const textNode = range.startContainer;
+    if (!textNode) return null;
+
+    const text = textNode.nodeType === 3 ? (textNode.nodeValue || textNode.textContent || "") : (element.textContent || "");
+    if (!text) return null;
+
+    const offset = range.startOffset;
+    let charIdx = offset;
+    if (charIdx >= text.length && text.length > 0) charIdx = text.length - 1;
+
+    if (!isJapaneseChar(text[charIdx])) {
+      if (charIdx > 0 && isJapaneseChar(text[charIdx - 1])) {
+        charIdx = charIdx - 1;
+      } else if (charIdx < text.length - 1 && isJapaneseChar(text[charIdx + 1])) {
+        charIdx = charIdx + 1;
+      } else {
+        return null;
+      }
+    }
+
+    let start = charIdx;
+    let end = charIdx;
+
+    while (start > 0 && isJapaneseChar(text[start - 1])) {
+      start--;
+    }
+    while (end < text.length - 1 && isJapaneseChar(text[end + 1])) {
+      end++;
+    }
+
+    const word = text.slice(start, end + 1).trim();
+    return word.length > 0 ? word : null;
+  }
+
   class SubtitleOverlayRenderer {
     constructor() {
       this.container = null;
@@ -304,8 +378,44 @@
       this.onFileDropped = null;
       this.isHoverLocked = false;
       this.pendingCue = undefined;
+      this._hoverWordTimer = null;
+      this._lastHoverWord = "";
       this._boundUpdatePosition = this.updatePosition.bind(this);
       this._boundFullscreenChange = this._onFullscreenChange.bind(this);
+
+      this._boundSubtitleMouseEnter = () => {
+        this.setHoverLocked(true);
+      };
+      this._boundSubtitleMouseLeave = () => {
+        this.setHoverLocked(false);
+        if (this._hoverWordTimer) {
+          clearTimeout(this._hoverWordTimer);
+          this._hoverWordTimer = null;
+        }
+        this._lastHoverWord = "";
+      };
+      this._boundSubtitleMouseMove = (e) => {
+        if (typeof window !== "undefined" && window.getSelection) {
+          const sel = window.getSelection();
+          if (sel && sel.toString().trim().length > 0) return;
+        }
+        if (this._hoverWordTimer) clearTimeout(this._hoverWordTimer);
+        this._hoverWordTimer = setTimeout(() => {
+          const word = extractJapaneseWordAtPosition(this.subtitleEl, e.clientX, e.clientY);
+          if (word && word !== this._lastHoverWord) {
+            this._lastHoverWord = word;
+            try {
+              if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+                chrome.runtime.sendMessage({
+                  type: "JAPANESE_TEXT_CAPTURED",
+                  text: word,
+                  source: "subtitle_hover"
+                }).catch(() => {});
+              }
+            } catch (_) {}
+          }
+        }, 180);
+      };
 
       this._boundDragOver = (e) => {
         e.preventDefault();
@@ -344,11 +454,8 @@
         }
         return fsEl;
       }
-      // Windowed mode: check for player container wrapper
-      const playerWrapper = (this.video.closest && this.video.closest(".jwplayer, #player, .video-js, [class*='player'], .html5-video-player, .watch-video")) || null;
-      if (playerWrapper && typeof playerWrapper.appendChild === "function") {
-        return playerWrapper;
-      }
+      // Windowed mode: Always attach to document.body so the overlay sits above player controls,
+      // transparent click shields (HiAnime MegaCloud/RapidCloud), and YouTube player overlays.
       return (typeof document !== "undefined" ? document.body : null) || this.video.parentElement;
     }
 
@@ -424,6 +531,13 @@
       }
 
       this.ensureMounted();
+
+      // Attach subtitle hover-lock and word detection listeners
+      if (this.subtitleEl && typeof this.subtitleEl.addEventListener === "function") {
+        this.subtitleEl.addEventListener("mouseenter", this._boundSubtitleMouseEnter);
+        this.subtitleEl.addEventListener("mouseleave", this._boundSubtitleMouseLeave);
+        this.subtitleEl.addEventListener("mousemove", this._boundSubtitleMouseMove);
+      }
 
       // Attach drag and drop listeners
       if (this.container && typeof this.container.addEventListener === "function") {
@@ -589,6 +703,17 @@
       document.removeEventListener("webkitfullscreenchange", this._boundFullscreenChange);
       document.removeEventListener("mozfullscreenchange", this._boundFullscreenChange);
       document.removeEventListener("MSFullscreenChange", this._boundFullscreenChange);
+
+      if (this.subtitleEl && typeof this.subtitleEl.removeEventListener === "function") {
+        this.subtitleEl.removeEventListener("mouseenter", this._boundSubtitleMouseEnter);
+        this.subtitleEl.removeEventListener("mouseleave", this._boundSubtitleMouseLeave);
+        this.subtitleEl.removeEventListener("mousemove", this._boundSubtitleMouseMove);
+      }
+      if (this._hoverWordTimer) {
+        clearTimeout(this._hoverWordTimer);
+        this._hoverWordTimer = null;
+      }
+      this._lastHoverWord = "";
 
       if (this.container && typeof this.container.removeEventListener === "function") {
         this.container.removeEventListener("dragover", this._boundDragOver);
@@ -961,6 +1086,8 @@
       this.enabled = false;
       this.isHovering = false;
       this.pausedByHover = false;
+      this._hoverPauseActive = false;
+      this._pauseTimestamp = 0;
       this.activeElement = null;
       this.attachedVideo = null;
       this._resumeTimeout = null;
@@ -979,6 +1106,7 @@
           this.resumePlayback();
         }
         this.isHovering = false;
+        this._hoverPauseActive = false;
       }
     }
 
@@ -999,6 +1127,7 @@
       this.activeElement = null;
       this.isHovering = false;
       this.pausedByHover = false;
+      this._hoverPauseActive = false;
     }
 
     attachVideo(video) {
@@ -1016,16 +1145,65 @@
       this.attachedVideo = null;
       this.cancelResume();
       this.pausedByHover = false;
+      this._hoverPauseActive = false;
     }
 
     handleVideoPlay() {
+      // If an in-flight play event fires synchronously or in the same microtask as our pause call,
+      // ignore it so it doesn't immediately corrupt the pausedByHover state.
+      if (this._isPausing) {
+        return;
+      }
+      // If the user or page explicitly resumed playback, relinquish hover lock
       this.pausedByHover = false;
+      this._hoverPauseActive = false;
     }
 
     cancelResume() {
       if (this._resumeTimeout !== null) {
         clearTimeout(this._resumeTimeout);
         this._resumeTimeout = null;
+      }
+    }
+
+    _doPlatformPause(video) {
+      if (!video) return;
+      try {
+        const isNetflix = typeof location !== "undefined" && location.hostname && location.hostname.includes("netflix.com");
+        if (isNetflix && typeof document !== "undefined") {
+          const nfPauseBtn = document.querySelector(".button-nfplayerPause, [data-uia=\"control-play-pause\"]");
+          if (nfPauseBtn && typeof nfPauseBtn.click === "function") {
+            nfPauseBtn.click();
+            return;
+          }
+        }
+        if (typeof video.pause === "function") {
+          video.pause();
+        }
+      } catch (_) {
+        // Best effort: Never throw or disrupt if player overrides
+      }
+    }
+
+    _doPlatformPlay(video) {
+      if (!video) return;
+      try {
+        const isNetflix = typeof location !== "undefined" && location.hostname && location.hostname.includes("netflix.com");
+        if (isNetflix && typeof document !== "undefined") {
+          const nfPlayBtn = document.querySelector(".button-nfplayerPlay, [data-uia=\"control-play-pause\"]");
+          if (nfPlayBtn && typeof nfPlayBtn.click === "function") {
+            nfPlayBtn.click();
+            return;
+          }
+        }
+        if (typeof video.play === "function") {
+          const p = video.play();
+          if (p && typeof p.catch === "function") {
+            p.catch(() => {});
+          }
+        }
+      } catch (_) {
+        // Best effort: Never throw
       }
     }
 
@@ -1049,9 +1227,13 @@
       // If already paused, we do NOT take ownership or resume on leave
       if (!video.paused) {
         this.pausedByHover = true;
+        this._hoverPauseActive = true;
+        this._isPausing = true;
         try {
-          video.pause();
-        } catch (_) {}
+          this._doPlatformPause(video);
+        } finally {
+          this._isPausing = false;
+        }
       }
     }
 
@@ -1072,19 +1254,16 @@
         const video = this.getVideo();
         if (!video || !video.isConnected || video.ended) {
           this.pausedByHover = false;
+          this._hoverPauseActive = false;
           return;
         }
 
         // Resume playback ONLY if AnkiMiner paused the video because of the hover
         if (this.pausedByHover) {
           this.pausedByHover = false;
+          this._hoverPauseActive = false;
           if (video.paused) {
-            try {
-              const p = video.play();
-              if (p && typeof p.catch === "function") {
-                p.catch(() => {});
-              }
-            } catch (_) {}
+            this._doPlatformPlay(video);
           }
         }
       };
@@ -1106,14 +1285,11 @@
       const video = this.getVideo();
       if (this.pausedByHover && video && video.isConnected && !video.ended && video.paused) {
         this.pausedByHover = false;
-        try {
-          const p = video.play();
-          if (p && typeof p.catch === "function") {
-            p.catch(() => {});
-          }
-        } catch (_) {}
+        this._hoverPauseActive = false;
+        this._doPlatformPlay(video);
       } else {
         this.pausedByHover = false;
+        this._hoverPauseActive = false;
       }
     }
   }
@@ -1276,6 +1452,60 @@
         };
       }
 
+      // Attempt Tier 1: Direct canvas capture from video element (untainted / local / same-origin)
+      if (typeof document !== "undefined" && typeof document.createElement === "function") {
+        try {
+          const vw = this.activeVideo.videoWidth || this.activeVideo.clientWidth || 0;
+          const vh = this.activeVideo.videoHeight || this.activeVideo.clientHeight || 0;
+          if (vw > 0 && vh > 0) {
+            const canvas = typeof options.createCanvas === "function"
+              ? options.createCanvas()
+              : document.createElement("canvas");
+            const targetDim = cropper.calculateTargetDimensions(vw, vh, options.maxWidth || 640, options.maxHeight || 360);
+            canvas.width = targetDim.width;
+            canvas.height = targetDim.height;
+            const ctx = (typeof canvas.getContext === "function" && canvas.getContext("2d", { willReadFrequently: true })) || (typeof canvas.getContext === "function" && canvas.getContext("2d"));
+            if (ctx) {
+              ctx.drawImage(this.activeVideo, 0, 0, canvas.width, canvas.height);
+              if (options.checkDrm !== false && typeof cropper.checkBlackFrame === "function" && typeof ctx.getImageData === "function") {
+                try {
+                  const frameData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                  if (frameData && frameData.data && cropper.checkBlackFrame(frameData.data, canvas.width, canvas.height)) {
+                    throw new Error("BLACK_FRAME_DETECTED");
+                  }
+                } catch (readErr) {
+                  // Canvas tainted or black frame -> throw to fall back to Tier 2 captureVisibleTab
+                  throw readErr;
+                }
+              }
+              const dataUrl = typeof canvas.toDataURL === "function"
+                ? canvas.toDataURL("image/jpeg", options.quality || 0.92)
+                : "";
+              if (dataUrl && dataUrl.startsWith("data:image/jpeg")) {
+                const res = {
+                  ok: true,
+                  dataUrl,
+                  width: canvas.width,
+                  height: canvas.height
+                };
+                if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+                  chrome.runtime.sendMessage({
+                    type: "SCREENSHOT_CAPTURED",
+                    dataUrl: res.dataUrl,
+                    timestamp: this.activeVideo.currentTime,
+                    width: res.width,
+                    height: res.height
+                  }).catch(() => {});
+                }
+                return res;
+              }
+            }
+          }
+        } catch (_) {
+          // Cross-origin stream / tainted canvas / black frame -> fall back to captureVisibleTab below
+        }
+      }
+
       let bgResponse;
       try {
         if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
@@ -1294,11 +1524,22 @@
       }
 
       if (!bgResponse?.ok || !bgResponse.dataUrl) {
-        return {
+        const failRes = {
           ok: false,
           error: bgResponse?.error || "CAPTURE_FAILED",
           message: bgResponse?.message || "Failed to capture visible tab"
         };
+        try {
+          if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+            chrome.runtime.sendMessage({
+              type: "SCREENSHOT_CAPTURE_STATUS",
+              ok: false,
+              error: failRes.error,
+              message: failRes.message
+            }).catch(() => {});
+          }
+        } catch (_) {}
+        return failRes;
       }
 
       const dpr = typeof options.devicePixelRatio === "number"
@@ -1327,9 +1568,137 @@
             }).catch(() => {});
           }
         } catch (_) {}
+      } else {
+        try {
+          if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+            chrome.runtime.sendMessage({
+              type: "SCREENSHOT_CAPTURE_STATUS",
+              ok: false,
+              error: cropResult.error || "CAPTURE_FAILED",
+              message: cropResult.message || "Protected video frame cannot be captured"
+            }).catch(() => {});
+          }
+        } catch (_) {}
       }
 
       return cropResult;
+    }
+
+    async recordSentenceAudio(cue = null, options = {}) {
+      if (!this.activeVideo || !this.activeVideo.isConnected) {
+        return {
+          ok: false,
+          error: "NO_ACTIVE_VIDEO",
+          message: "No active video element detected"
+        };
+      }
+
+      let targetCue = cue || this.syncEngine?.currentCue;
+      if (!targetCue && this.syncEngine && Array.isArray(this.syncEngine.cues) && this.syncEngine.cues.length > 0) {
+        targetCue = (typeof this.syncEngine.findCueAtTime === "function" ? this.syncEngine.findCueAtTime(this.activeVideo.currentTime) : null) || this.syncEngine.lastActiveCue || null;
+      }
+      const rawStart = typeof targetCue?.start === "number"
+        ? targetCue.start
+        : (typeof targetCue?.startTime === "number" ? targetCue.startTime : null);
+      const rawEnd = typeof targetCue?.end === "number"
+        ? targetCue.end
+        : (typeof targetCue?.endTime === "number" ? targetCue.endTime : null);
+
+      if (!targetCue || rawStart === null || rawEnd === null) {
+        return {
+          ok: false,
+          error: "NO_ACTIVE_CUE",
+          message: "No subtitle cue available for audio capture"
+        };
+      }
+
+      const paddingStart = typeof options.audioPaddingStart === "number"
+        ? options.audioPaddingStart
+        : 0.15; // 150 ms
+      const paddingEnd = typeof options.audioPaddingEnd === "number"
+        ? options.audioPaddingEnd
+        : 0.20; // 200 ms
+      const offset = typeof options.offset === "number"
+        ? options.offset
+        : (this.syncEngine?.offset || 0.0);
+      const playbackRate = typeof options.playbackRate === "number"
+        ? options.playbackRate
+        : (this.activeVideo.playbackRate || 1.0);
+
+      const startTime = Math.max(0, (rawStart + offset) - paddingStart);
+      const endTime = (rawEnd + offset) + paddingEnd;
+      const durationSeconds = Math.max(0.1, (endTime - startTime) / playbackRate);
+      const durationMs = Math.round(durationSeconds * 1000);
+
+      // Playback invariant: Video must NEVER be seeked, paused, or played by audio capture.
+      // Live audio capture requires the video to be actively playing.
+      // If paused, fail gracefully without disrupting playback or throwing errors.
+      if (this.activeVideo.paused && !options.allowPausedRecording) {
+        return {
+          ok: false,
+          error: "AUDIO_CAPTURE_UNAVAILABLE",
+          message: "Audio capture is unavailable while video is paused"
+        };
+      }
+
+      // Send recording request to background service worker
+      const sendMsg = options.sendMessage || (
+        typeof chrome !== "undefined" && chrome.runtime?.sendMessage
+          ? chrome.runtime.sendMessage.bind(chrome.runtime)
+          : null
+      );
+
+      if (!sendMsg) {
+        return {
+          ok: false,
+          error: "MESSAGING_UNAVAILABLE",
+          message: "chrome.runtime.sendMessage is not available"
+        };
+      }
+
+      let recResult;
+      try {
+        recResult = await sendMsg({
+          type: "START_AUDIO_RECORDING",
+          durationMs: durationMs,
+          mimeType: options.mimeType || "audio/webm;codecs=opus"
+        });
+      } catch (err) {
+        recResult = {
+          ok: false,
+          error: "RECORDING_REQUEST_FAILED",
+          message: err?.message || "Audio recording communication failed"
+        };
+      }
+
+      if (recResult?.ok) {
+        try {
+          if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+            chrome.runtime.sendMessage({
+              type: "AUDIO_CAPTURED",
+              dataUrl: recResult.dataUrl,
+              mimeType: recResult.mimeType || "audio/webm",
+              startTime,
+              endTime,
+              durationMs,
+              cue: targetCue
+            }).catch(() => {});
+          }
+        } catch (_) {}
+      } else {
+        try {
+          if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+            chrome.runtime.sendMessage({
+              type: "AUDIO_CAPTURE_STATUS",
+              ok: false,
+              error: recResult?.error || "AUDIO_UNAVAILABLE",
+              message: recResult?.message || "Audio unavailable for this source"
+            }).catch(() => {});
+          }
+        } catch (_) {}
+      }
+
+      return recResult;
     }
 
     handleMessage(message, _sender, sendResponse) {
@@ -1338,6 +1707,14 @@
           sendResponse?.(res);
         }).catch(err => {
           sendResponse?.({ ok: false, error: err?.message || "SCREENSHOT_FAILED" });
+        });
+        return true;
+      }
+      if (message?.type === "TRIGGER_AUDIO_RECORDING") {
+        this.recordSentenceAudio(message.cue, message.options).then(res => {
+          sendResponse?.(res);
+        }).catch(err => {
+          sendResponse?.({ ok: false, error: err?.message || "AUDIO_RECORDING_FAILED" });
         });
         return true;
       }

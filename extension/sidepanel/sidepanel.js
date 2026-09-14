@@ -16,6 +16,11 @@ const expression = document.querySelector("#expression");
 const reading = document.querySelector("#reading");
 const meanings = document.querySelector("#meanings");
 const examples = document.querySelector("#examples");
+const dictActionsBar = document.querySelector("#dict-actions-bar");
+const btnCopyRawDict = document.querySelector("#btn-copy-raw-dict");
+const btnToggleFullDict = document.querySelector("#btn-toggle-full-dict");
+const dictRawView = document.querySelector("#dict-raw-view");
+let currentDictionaryEntries = [];
 
 // Indicators
 const indicatorYomitan = document.querySelector("#indicator-yomitan");
@@ -47,6 +52,17 @@ const saveCardBtn = document.querySelector("#save-card-btn");
 const syncAnkiBtn = document.querySelector("#sync-anki-btn");
 const ankiSyncStatus = document.querySelector("#anki-sync-status");
 
+// Media preview elements
+const mediaPreviewContainer = document.querySelector("#media-preview-container");
+const imagePreviewContainer = document.querySelector("#image-preview-container");
+const imagePreview = document.querySelector("#image-preview");
+const imageEmptyPlaceholder = document.querySelector("#image-empty-placeholder");
+const btnClearImage = document.querySelector("#btn-clear-image");
+const audioPreviewContainer = document.querySelector("#audio-preview-container");
+const audioPreview = document.querySelector("#audio-preview");
+const audioEmptyPlaceholder = document.querySelector("#audio-empty-placeholder");
+const btnClearAudio = document.querySelector("#btn-clear-audio");
+
 // History & Card Library elements
 const historySection = document.querySelector("#history-section");
 const historyCount = document.querySelector("#history-count");
@@ -76,11 +92,14 @@ const offsetPlusBtn = document.querySelector("#offset-plus-btn");
 const offsetDisplay = document.querySelector("#offset-display");
 const videoCurrentCuePreview = document.querySelector("#video-current-cue-preview");
 const toggleAutoPauseHover = document.querySelector("#toggle-auto-pause-hover");
+const toggleAutoCaptureFrame = document.querySelector("#toggle-auto-capture-frame");
+const toggleAutoCaptureAudio = document.querySelector("#toggle-auto-capture-audio");
 
 let currentSubtitleOffsetMs = 0;
 let currentSubtitleOffset = 0.0;
 let loadedSubtitlesFilename = "";
 let availableCaptionTracks = [];
+let lastCaptureSource = { tabId: null, frameId: null };
 
 let selectedHistoryCardId = null;
 let searchDebounceTimeout = null;
@@ -89,6 +108,12 @@ let miningMode = false;
 let currentCaptureId = 0;
 let sessionCardCount = 0;
 let ankiConnected = false;
+let currentDraftMedia = {
+  imageBase64: null,
+  audioBase64: null,
+  mimeType: null,
+  captureId: null
+};
 
 function setIndicatorStatus(indicatorEl, state, titleText) {
   if (!indicatorEl) return;
@@ -234,6 +259,7 @@ async function loadModels() {
         fieldModelSelect.value = targetModel;
       }
       if (fieldModelName) fieldModelName.value = fieldModelSelect.value;
+      loadModelCapabilities(fieldModelSelect.value).catch(() => {});
     }
   } catch (_) {
     if (fieldModelSelect && !fieldModelSelect.options.length) {
@@ -241,6 +267,43 @@ async function loadModels() {
       opt.value = "Basic";
       opt.textContent = "Basic";
       fieldModelSelect.append(opt);
+    }
+  }
+}
+
+let currentModelCapabilities = {
+  supports_image: true,
+  supports_audio: true,
+  supports_sentence: true
+};
+
+async function loadModelCapabilities(modelName) {
+  try {
+    const url = modelName
+      ? `http://127.0.0.1:8000/api/anki/model-capabilities?model_name=${encodeURIComponent(modelName)}`
+      : `http://127.0.0.1:8000/api/anki/model-capabilities`;
+    const res = await fetch(url);
+    if (res.ok) {
+      const caps = await res.json();
+      currentModelCapabilities = {
+        supports_image: Boolean(caps.supports_image),
+        supports_audio: Boolean(caps.supports_audio),
+        supports_sentence: Boolean(caps.supports_sentence)
+      };
+      updateModelCapabilityWarnings();
+    }
+  } catch (_) {}
+}
+
+function updateModelCapabilityWarnings() {
+  if (btnRetakeImage) {
+    if (!currentModelCapabilities.supports_image && ankiConnected) {
+      btnRetakeImage.title = "Selected Anki model lacks image field (saved locally only)";
+    }
+  }
+  if (btnRetakeAudio) {
+    if (!currentModelCapabilities.supports_audio && ankiConnected) {
+      btnRetakeAudio.title = "Selected Anki model lacks audio field (saved locally only)";
     }
   }
 }
@@ -306,6 +369,7 @@ if (fieldModelSelect) {
   fieldModelSelect.addEventListener("change", () => {
     const val = fieldModelSelect.value;
     if (fieldModelName) fieldModelName.value = val;
+    loadModelCapabilities(val).catch(() => {});
     try {
       if (typeof chrome !== "undefined" && chrome.storage?.local) {
         chrome.storage.local.set({preferred_anki_model: val});
@@ -373,54 +437,317 @@ function add(parent, tag, text, className = "") {
   return element;
 }
 
-function renderDetails(body) {
-  meanings.replaceChildren();
-  examples.replaceChildren();
-  for (const entry of body.entries || []) {
-    const block = document.createElement("article");
-    block.className = "dictionary-entry";
-
-    const titleH2 = add(block, "h2", entry.dictionary);
-    if (entry.is_primary) {
-      const primaryBadge = document.createElement("span");
-      primaryBadge.className = "badge";
-      primaryBadge.textContent = "Primary";
-      primaryBadge.style.fontSize = "10px";
-      titleH2.append(primaryBadge);
+function formatRawDictionaryText(entries) {
+  if (!Array.isArray(entries) || !entries.length) return "";
+  const lines = [];
+  entries.forEach((entry, eIdx) => {
+    lines.push(`=== ${entry.dictionary || "Dictionary"}${entry.is_primary ? " (Primary)" : ""} ===`);
+    if (entry.term || entry.reading) {
+      lines.push(`Term: ${entry.term || ""}${entry.reading ? ` [${entry.reading}]` : ""}`);
     }
-
-    if (entry.parts_of_speech?.length) {
-      const metaContainer = document.createElement("div");
-      metaContainer.className = "meta";
-      entry.parts_of_speech.forEach(pos => {
-        add(metaContainer, "span", pos, "pos-tag");
-      });
-      block.append(metaContainer);
+    if (entry.parts_of_speech && entry.parts_of_speech.length) {
+      lines.push(`POS: ${entry.parts_of_speech.join(", ")}`);
     }
-
-    entry.senses.forEach((sense, index) => {
-      const section = document.createElement("section");
-      section.className = "sense";
-      if (entry.senses.length > 1) {
-        add(section, "p", `SENSE ${index + 1}`, "sense-label");
-      }
-      if (sense.glosses?.length) {
-        const list = document.createElement("ul");
-        sense.glosses.forEach(gloss => add(list, "li", gloss));
-        section.append(list);
-      }
-      sense.notes?.forEach(note => add(section, "p", note, "note"));
-      sense.examples?.forEach(example => {
-        const egCard = document.createElement("div");
-        egCard.className = "example-card";
-        add(egCard, "p", example.japanese, "example");
-        if (example.translation) add(egCard, "p", example.translation, "translation");
-        section.append(egCard);
+    if (entry.tags && entry.tags.length) {
+      lines.push(`Tags: ${entry.tags.join(", ")}`);
+    }
+    if (entry.senses && entry.senses.length) {
+      lines.push("Senses:");
+      entry.senses.forEach((sense, sIdx) => {
+        const glosses = (sense.glosses || []).join("; ");
+        lines.push(`  ${sIdx + 1}. ${glosses}`);
+        if (sense.notes && sense.notes.length) {
+          lines.push(`     Notes: ${sense.notes.join("; ")}`);
+        }
+        if (sense.examples && sense.examples.length) {
+          lines.push("     Examples:");
+          sense.examples.forEach(eg => {
+            lines.push(`       - ${eg.japanese}${eg.translation ? ` : ${eg.translation}` : ""}`);
+          });
+        }
       });
-      block.append(section);
-    });
-    meanings.append(block);
+    }
+    if (eIdx < entries.length - 1) lines.push("");
+  });
+  return lines.join("\n");
+}
+
+async function copyTextToClipboard(text) {
+  if (!text) return false;
+  try {
+    if (typeof navigator !== "undefined" && navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (e) {
+    // fallback
   }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    const success = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return success;
+  } catch (e) {
+    return false;
+  }
+}
+
+function clearDictionaryView() {
+  if (meanings) {
+    meanings.replaceChildren();
+    meanings.hidden = false;
+  }
+  if (examples) examples.replaceChildren();
+  if (dictRawView) {
+    dictRawView.replaceChildren();
+    dictRawView.hidden = true;
+  }
+  if (dictActionsBar) dictActionsBar.style.display = "none";
+  if (btnToggleFullDict) {
+    btnToggleFullDict.textContent = "Full Dict";
+    btnToggleFullDict.title = "Show full unabridged dictionary";
+  }
+  currentDictionaryEntries = [];
+}
+
+function renderDetails(body) {
+  clearDictionaryView();
+  const entries = Array.isArray(body?.entries) ? body.entries : [];
+  currentDictionaryEntries = entries;
+  if (!entries.length) return;
+
+  if (dictActionsBar) dictActionsBar.style.display = "flex";
+
+  // 1. Clean Study View rendered into #meanings
+  if (meanings) {
+    const primaryEntry = entries.find(e => e.is_primary) || entries[0];
+
+    // Primary Attribution Header
+    const header = document.createElement("div");
+    header.className = "study-dict-header";
+
+    const dictPill = document.createElement("span");
+    dictPill.className = "dict-source-pill";
+    dictPill.textContent = primaryEntry.dictionary || "Dictionary";
+    header.append(dictPill);
+
+    if (primaryEntry.is_primary) {
+      const primaryBadge = document.createElement("span");
+      primaryBadge.className = "badge primary-badge";
+      primaryBadge.textContent = "Primary";
+      header.append(primaryBadge);
+    }
+
+    if (entries.length > 1) {
+      const moreCount = entries.length - 1;
+      const countPill = document.createElement("span");
+      countPill.className = "dict-count-pill";
+      countPill.textContent = `+${moreCount} more dict${moreCount > 1 ? "s" : ""}`;
+      header.append(countPill);
+    }
+    meanings.append(header);
+
+    // Compact Deduplicated POS Badges
+    const allPos = [];
+    const seenPos = new Set();
+    entries.forEach(e => {
+      (e.parts_of_speech || []).forEach(pos => {
+        const trimmed = (pos || "").trim();
+        if (trimmed && !seenPos.has(trimmed.toLowerCase())) {
+          seenPos.add(trimmed.toLowerCase());
+          allPos.push(trimmed);
+        }
+      });
+    });
+
+    if (allPos.length) {
+      const posRow = document.createElement("div");
+      posRow.className = "study-pos-row";
+      allPos.forEach(pos => {
+        add(posRow, "span", pos, "study-pos-badge");
+      });
+      meanings.append(posRow);
+    }
+
+    // Numbered, Deduplicated Senses & Collected Examples
+    const seenSenseKeys = new Set();
+    const uniqueSenses = [];
+    const allExamples = [];
+
+    for (const entry of entries) {
+      for (const sense of (entry.senses || [])) {
+        const distinctGlosses = [];
+        const seenInSense = new Set();
+        for (const g of (sense.glosses || [])) {
+          const norm = (g || "").trim().toLowerCase();
+          if (norm && !seenInSense.has(norm)) {
+            seenInSense.add(norm);
+            distinctGlosses.push(g.trim());
+          }
+        }
+        if (!distinctGlosses.length) continue;
+
+        const senseKey = distinctGlosses.map(g => g.toLowerCase()).sort().join("|");
+        if (!seenSenseKeys.has(senseKey)) {
+          seenSenseKeys.add(senseKey);
+          uniqueSenses.push({
+            glosses: distinctGlosses,
+            tags: sense.tags || [],
+            notes: sense.notes || []
+          });
+        }
+
+        if (sense.examples && sense.examples.length) {
+          for (const eg of sense.examples) {
+            if (eg.japanese && !allExamples.some(x => x.japanese === eg.japanese)) {
+              allExamples.push(eg);
+            }
+          }
+        }
+      }
+    }
+
+    if (uniqueSenses.length) {
+      const ol = document.createElement("ol");
+      ol.className = "study-senses-list";
+      uniqueSenses.forEach((sense, index) => {
+        const li = document.createElement("li");
+        li.className = "study-sense-item";
+
+        if (uniqueSenses.length > 1) {
+          add(li, "span", `${index + 1}.`, "study-sense-num");
+        }
+
+        const bodyDiv = document.createElement("div");
+        bodyDiv.className = "study-sense-body";
+        add(bodyDiv, "span", sense.glosses.join("; "), "study-glosses");
+
+        if (sense.notes?.length) {
+          sense.notes.forEach(note => add(bodyDiv, "p", note, "study-sense-note"));
+        }
+        li.append(bodyDiv);
+        ol.append(li);
+      });
+      meanings.append(ol);
+    }
+
+    // Collapsible Examples Accordion (collapsed by default)
+    if (allExamples.length) {
+      const details = document.createElement("details");
+      details.className = "study-examples-accordion";
+
+      const summary = document.createElement("summary");
+      summary.className = "study-examples-summary";
+      summary.textContent = `Examples (${allExamples.length})`;
+      details.append(summary);
+
+      const listDiv = document.createElement("div");
+      listDiv.className = "study-examples-list";
+      allExamples.forEach(eg => {
+        const card = document.createElement("div");
+        card.className = "study-example-card";
+        add(card, "p", eg.japanese, "study-example-ja");
+        if (eg.translation) {
+          add(card, "p", eg.translation, "study-example-en");
+        }
+        listDiv.append(card);
+      });
+      details.append(listDiv);
+      meanings.append(details);
+    }
+  }
+
+  // 2. Full Raw Unabridged Output rendered into #dict-raw-view
+  if (dictRawView) {
+    for (const entry of entries) {
+      const block = document.createElement("article");
+      block.className = "raw-dictionary-entry";
+
+      const headerDiv = document.createElement("div");
+      headerDiv.className = "raw-entry-header";
+      add(headerDiv, "h3", entry.dictionary || "Dictionary");
+      if (entry.is_primary) {
+        const primaryBadge = document.createElement("span");
+        primaryBadge.className = "badge primary-badge";
+        primaryBadge.textContent = "Primary";
+        primaryBadge.style.fontSize = "10px";
+        headerDiv.append(primaryBadge);
+      }
+      block.append(headerDiv);
+
+      if (entry.parts_of_speech?.length) {
+        const metaContainer = document.createElement("div");
+        metaContainer.className = "meta";
+        entry.parts_of_speech.forEach(pos => {
+          add(metaContainer, "span", pos, "pos-tag");
+        });
+        block.append(metaContainer);
+      }
+
+      (entry.senses || []).forEach((sense, index) => {
+        const section = document.createElement("section");
+        section.className = "sense";
+        if ((entry.senses || []).length > 1) {
+          add(section, "p", `SENSE ${index + 1}`, "sense-label");
+        }
+        if (sense.glosses?.length) {
+          const list = document.createElement("ul");
+          sense.glosses.forEach(gloss => add(list, "li", gloss));
+          section.append(list);
+        }
+        sense.notes?.forEach(note => add(section, "p", note, "note"));
+        sense.examples?.forEach(example => {
+          const egCard = document.createElement("div");
+          egCard.className = "example-card";
+          add(egCard, "p", example.japanese, "example");
+          if (example.translation) add(egCard, "p", example.translation, "translation");
+          section.append(egCard);
+        });
+        block.append(section);
+      });
+      dictRawView.append(block);
+    }
+  }
+}
+
+if (btnCopyRawDict) {
+  btnCopyRawDict.addEventListener("click", async () => {
+    const rawText = formatRawDictionaryText(currentDictionaryEntries);
+    if (!rawText) return;
+    const ok = await copyTextToClipboard(rawText);
+    if (ok) {
+      const origText = btnCopyRawDict.textContent;
+      btnCopyRawDict.textContent = "Copied! ✓";
+      btnCopyRawDict.classList.add("copied");
+      setTimeout(() => {
+        btnCopyRawDict.textContent = origText;
+        btnCopyRawDict.classList.remove("copied");
+      }, 1500);
+    }
+  });
+}
+
+if (btnToggleFullDict) {
+  btnToggleFullDict.addEventListener("click", () => {
+    if (!dictRawView || !meanings) return;
+    const isShowingRaw = !dictRawView.hidden;
+    if (isShowingRaw) {
+      dictRawView.hidden = true;
+      meanings.hidden = false;
+      btnToggleFullDict.textContent = "Full Dict";
+      btnToggleFullDict.title = "Show full unabridged dictionary";
+    } else {
+      dictRawView.hidden = false;
+      meanings.hidden = true;
+      btnToggleFullDict.textContent = "Study View";
+      btnToggleFullDict.title = "Show compact study view";
+    }
+  });
 }
 
 async function identify(text) {
@@ -436,8 +763,8 @@ async function identify(text) {
   }
   expression.textContent = "—";
   reading.textContent = "";
-  meanings.replaceChildren();
-  examples.replaceChildren();
+  clearDictionaryView();
+  clearAllMedia();
 
   try {
     const response = await fetch(API_CAPTURE_URL, {
@@ -493,8 +820,31 @@ async function identify(text) {
       if (fieldExampleTranslation) fieldExampleTranslation.value = body.example_translation || "";
       if (fieldImage) fieldImage.value = body.image || "";
       if (fieldAudio) fieldAudio.value = body.audio || "";
+
+      if (body.image) {
+        const imgSrc = body.image.startsWith("data:") || body.image.startsWith("http:") || body.image.startsWith("https:")
+          ? body.image
+          : `http://127.0.0.1:8000/api/media/${body.image}`;
+        currentDraftMedia.imageBase64 = imgSrc;
+      }
+      if (body.audio) {
+        const audioSrc = body.audio.startsWith("data:") || body.audio.startsWith("http:") || body.audio.startsWith("https:")
+          ? body.audio
+          : `http://127.0.0.1:8000/api/media/${body.audio}`;
+        currentDraftMedia.audioBase64 = audioSrc;
+      }
+      updateMediaPreviews();
       if (fieldTags) fieldTags.value = body.tags || "";
       if (fieldNotes) fieldNotes.value = body.notes || "";
+
+      // Automatically trigger frame screenshot if enabled and media is not already saved.
+      // NOTE: Subtitle/word identification/hover must NEVER automatically trigger audio capture,
+      // as audio capture must only occur during active mining flows without disrupting video playback.
+      const shouldAutoCaptureFrame = toggleAutoCaptureFrame ? toggleAutoCaptureFrame.checked : true;
+
+      if (!body.image && shouldAutoCaptureFrame && isVideoMiningActive()) {
+        retakeScreenshot();
+      }
 
       // Sync state update
       if (body.id) {
@@ -530,6 +880,149 @@ async function identify(text) {
     setIndicatorStatus(indicatorYomitan, "unavailable", "Yomitan: Unavailable");
     setStatus(formatErrorMessage(error), true);
   }
+}
+
+// Media preview management
+function isVideoMiningActive() {
+  if (videoMiningView && !videoMiningView.hidden) return true;
+  if (tabBtnVideo && tabBtnVideo.classList.contains("active")) return true;
+  return false;
+}
+
+function updateMediaPreviews() {
+  const hasImage = Boolean(currentDraftMedia.imageBase64);
+  const hasAudio = Boolean(currentDraftMedia.audioBase64);
+
+  if (imagePreview) {
+    if (hasImage) {
+      imagePreview.src = currentDraftMedia.imageBase64;
+      imagePreview.hidden = false;
+    } else {
+      imagePreview.removeAttribute("src");
+      imagePreview.hidden = true;
+    }
+  }
+
+  if (imageEmptyPlaceholder) {
+    imageEmptyPlaceholder.hidden = hasImage;
+  }
+
+  if (btnClearImage) {
+    btnClearImage.hidden = !hasImage;
+  }
+
+  if (audioPreview) {
+    if (hasAudio) {
+      audioPreview.src = currentDraftMedia.audioBase64;
+      audioPreview.hidden = false;
+    } else {
+      if (typeof audioPreview.pause === "function") {
+        try { audioPreview.pause(); } catch (_) {}
+      }
+      audioPreview.removeAttribute("src");
+      audioPreview.hidden = true;
+    }
+  }
+
+  if (audioEmptyPlaceholder) {
+    audioEmptyPlaceholder.hidden = hasAudio;
+  }
+
+  if (btnClearAudio) {
+    btnClearAudio.hidden = !hasAudio;
+  }
+
+  if (mediaPreviewContainer) {
+    mediaPreviewContainer.hidden = false;
+  }
+}
+
+function clearImageMedia() {
+  currentDraftMedia.imageBase64 = null;
+  if (fieldImage) fieldImage.value = "";
+  updateMediaPreviews();
+  setStatus("Image cleared.");
+}
+
+function clearAudioMedia() {
+  currentDraftMedia.audioBase64 = null;
+  currentDraftMedia.mimeType = null;
+  if (fieldAudio) fieldAudio.value = "";
+  updateMediaPreviews();
+  setStatus("Audio cleared.");
+}
+
+function clearAllMedia() {
+  currentDraftMedia.imageBase64 = null;
+  currentDraftMedia.audioBase64 = null;
+  currentDraftMedia.mimeType = null;
+  currentDraftMedia.captureId = null;
+  updateMediaPreviews();
+}
+
+function captureOrRetakeScreenshot() {
+  if (cardEditor && cardEditor.hidden) cardEditor.hidden = false;
+  retakeScreenshot();
+}
+
+function recordOrRetakeAudio() {
+  if (cardEditor && cardEditor.hidden) cardEditor.hidden = false;
+  retakeAudio();
+}
+
+function retakeScreenshot() {
+  setStatus("Capturing video frame screenshot…");
+  broadcastToActiveVideo({
+    type: "TRIGGER_VIDEO_SCREENSHOT",
+    options: {
+      maxWidth: 640,
+      maxHeight: 360,
+      quality: 0.92
+    }
+  });
+}
+
+function retakeAudio() {
+  setStatus("Recording sentence audio…");
+  broadcastToActiveVideo({
+    type: "TRIGGER_AUDIO_RECORDING",
+    options: {
+      mimeType: "audio/webm;codecs=opus"
+    }
+  });
+}
+
+if (btnClearImage) {
+  btnClearImage.addEventListener("click", clearImageMedia);
+}
+if (btnClearAudio) {
+  btnClearAudio.addEventListener("click", clearAudioMedia);
+}
+
+if (fieldImage) {
+  fieldImage.addEventListener("input", () => {
+    const val = fieldImage.value.trim();
+    if (val && (val.startsWith("http://") || val.startsWith("https://") || val.startsWith("data:image/"))) {
+      currentDraftMedia.imageBase64 = val;
+      updateMediaPreviews();
+    } else if (!val && currentDraftMedia.imageBase64 && !currentDraftMedia.imageBase64.startsWith("data:image/")) {
+      currentDraftMedia.imageBase64 = null;
+      updateMediaPreviews();
+    }
+  });
+}
+
+if (fieldAudio) {
+  fieldAudio.addEventListener("input", () => {
+    const val = fieldAudio.value.trim();
+    if (val && (val.startsWith("http://") || val.startsWith("https://") || val.startsWith("data:audio/"))) {
+      currentDraftMedia.audioBase64 = val;
+      updateMediaPreviews();
+    } else if (!val && currentDraftMedia.audioBase64 && !currentDraftMedia.audioBase64.startsWith("data:audio/")) {
+      currentDraftMedia.audioBase64 = null;
+      updateMediaPreviews();
+    }
+  });
 }
 
 // Progressive disclosure toggle for optional fields
@@ -569,6 +1062,9 @@ if (cardEditor) {
       example_translation: fieldExampleTranslation ? fieldExampleTranslation.value.trim() : "",
       image: fieldImage ? fieldImage.value.trim() : "",
       audio: fieldAudio ? fieldAudio.value.trim() : "",
+      image_data: currentDraftMedia.imageBase64 || null,
+      audio_data: currentDraftMedia.audioBase64 || null,
+      media_mime_type: currentDraftMedia.mimeType || null,
       tags: fieldTags ? fieldTags.value.trim() : "",
       notes: fieldNotes ? fieldNotes.value.trim() : "",
       source_text: fieldSourceText ? fieldSourceText.value.trim() : "",
@@ -942,6 +1438,21 @@ async function openSavedCard(cardId) {
       if (fieldExampleTranslation) fieldExampleTranslation.value = body.example_translation || "";
       if (fieldImage) fieldImage.value = body.image || "";
       if (fieldAudio) fieldAudio.value = body.audio || "";
+
+      clearAllMedia();
+      if (body.image) {
+        const imgSrc = body.image.startsWith("data:") || body.image.startsWith("http:") || body.image.startsWith("https:")
+          ? body.image
+          : `http://127.0.0.1:8000/api/media/${body.image}`;
+        currentDraftMedia.imageBase64 = imgSrc;
+      }
+      if (body.audio) {
+        const audioSrc = body.audio.startsWith("data:") || body.audio.startsWith("http:") || body.audio.startsWith("https:")
+          ? body.audio
+          : `http://127.0.0.1:8000/api/media/${body.audio}`;
+        currentDraftMedia.audioBase64 = audioSrc;
+      }
+      updateMediaPreviews();
       if (fieldTags) fieldTags.value = body.tags || "";
       if (fieldNotes) fieldNotes.value = body.notes || "";
       if (fieldSourceText) fieldSourceText.value = body.source_text || "";
@@ -1020,6 +1531,7 @@ async function deleteLocalCard(cardId, cardExpr) {
       if (fieldNotes) fieldNotes.value = "";
       if (expression) expression.textContent = "—";
       if (reading) reading.textContent = "";
+      clearDictionaryView();
       if (saveBadge) {
         saveBadge.hidden = true;
         saveBadge.textContent = "";
@@ -1145,12 +1657,19 @@ async function loadSubtitleOffsetPreference() {
   } catch (_) {}
 }
 
-async function broadcastToActiveVideo(message) {
+async function broadcastToActiveVideo(message, targetFrame = null) {
+  const frameInfo = targetFrame || lastCaptureSource;
   try {
     if (typeof chrome !== "undefined" && chrome.tabs?.query) {
       const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-      if (tab?.id) {
-        chrome.tabs.sendMessage(tab.id, message).catch(() => {});
+      const targetTabId = frameInfo?.tabId || tab?.id;
+      if (targetTabId) {
+        const sendOptions = typeof frameInfo?.frameId === "number" ? { frameId: frameInfo.frameId } : undefined;
+        if (sendOptions) {
+          chrome.tabs.sendMessage(targetTabId, message, sendOptions).catch(() => {});
+        } else {
+          chrome.tabs.sendMessage(targetTabId, message).catch(() => {});
+        }
       }
     }
   } catch (_) {}
@@ -1357,9 +1876,50 @@ function setAutoPausePreference(enabled) {
   });
 }
 
+async function loadAutoCapturePreferences() {
+  try {
+    let autoFrame = true;
+    let autoAudio = true;
+    if (typeof chrome !== "undefined" && chrome.storage?.local) {
+      const stored = await chrome.storage.local.get(["auto_capture_frame", "auto_capture_audio"]);
+      if (typeof stored?.auto_capture_frame === "boolean") autoFrame = stored.auto_capture_frame;
+      if (typeof stored?.auto_capture_audio === "boolean") autoAudio = stored.auto_capture_audio;
+    } else if (typeof localStorage !== "undefined") {
+      const sf = localStorage.getItem("auto_capture_frame");
+      if (sf !== null) autoFrame = sf === "true";
+      const sa = localStorage.getItem("auto_capture_audio");
+      if (sa !== null) autoAudio = sa === "true";
+    }
+    if (toggleAutoCaptureFrame) toggleAutoCaptureFrame.checked = autoFrame;
+    if (toggleAutoCaptureAudio) toggleAutoCaptureAudio.checked = autoAudio;
+  } catch (_) {}
+}
+
+function setAutoCapturePreference(key, enabled) {
+  try {
+    if (typeof chrome !== "undefined" && chrome.storage?.local) {
+      chrome.storage.local.set({ [key]: enabled });
+    } else if (typeof localStorage !== "undefined") {
+      localStorage.setItem(key, String(enabled));
+    }
+  } catch (_) {}
+}
+
 if (toggleAutoPauseHover) {
   toggleAutoPauseHover.addEventListener("change", (e) => {
     setAutoPausePreference(Boolean(e.target.checked));
+  });
+}
+
+if (toggleAutoCaptureFrame) {
+  toggleAutoCaptureFrame.addEventListener("change", (e) => {
+    setAutoCapturePreference("auto_capture_frame", Boolean(e.target.checked));
+  });
+}
+
+if (toggleAutoCaptureAudio) {
+  toggleAutoCaptureAudio.addEventListener("change", (e) => {
+    setAutoCapturePreference("auto_capture_audio", Boolean(e.target.checked));
   });
 }
 
@@ -1372,8 +1932,71 @@ toggle.addEventListener("click", () => {
   });
 });
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === "SCREENSHOT_CAPTURED") {
+    if (message.captureId && currentCaptureId && message.captureId !== currentCaptureId) {
+      sendResponse?.({ok: false, error: "STALE_CAPTURE"});
+      return true;
+    }
+    if (message.dataUrl) {
+      currentDraftMedia.imageBase64 = message.dataUrl;
+      currentDraftMedia.captureId = currentCaptureId;
+      if (cardEditor && cardEditor.hidden) cardEditor.hidden = false;
+      if (fieldImage && !fieldImage.value) {
+        fieldImage.value = "captured_frame.jpg";
+      }
+      updateMediaPreviews();
+      setStatus("Screenshot captured.");
+    }
+    sendResponse?.({ok: true});
+    return true;
+  }
+  if (message?.type === "SCREENSHOT_CAPTURE_STATUS") {
+    if (!message.ok) {
+      const isDrm = message.error === "DRM_PROTECTED" || message.error === "DRM_IMAGE_RESTRICTED";
+      const statusText = isDrm
+        ? "Image unavailable for this source (DRM protected)."
+        : (message.message || "Image unavailable for this source.");
+      setStatus(statusText);
+    }
+    sendResponse?.({ ok: true });
+    return true;
+  }
+  if (message?.type === "AUDIO_CAPTURED") {
+    if (message.captureId && currentCaptureId && message.captureId !== currentCaptureId) {
+      sendResponse?.({ok: false, error: "STALE_CAPTURE"});
+      return true;
+    }
+    if (message.dataUrl) {
+      currentDraftMedia.audioBase64 = message.dataUrl;
+      currentDraftMedia.mimeType = message.mimeType || "audio/webm";
+      currentDraftMedia.captureId = currentCaptureId;
+      if (cardEditor && cardEditor.hidden) cardEditor.hidden = false;
+      if (fieldAudio && !fieldAudio.value) {
+        fieldAudio.value = "captured_audio.webm";
+      }
+      updateMediaPreviews();
+      setStatus("Audio snippet recorded.");
+    }
+    sendResponse?.({ok: true});
+    return true;
+  }
+  if (message?.type === "AUDIO_CAPTURE_STATUS") {
+    if (!message.ok) {
+      const isDrm = message.error === "DRM_AUDIO_RESTRICTED" || message.error === "DRM_AUDIO";
+      const statusText = isDrm
+        ? "Audio unavailable for this source (DRM protected)."
+        : (message.message || "Audio unavailable for this source.");
+      setStatus(statusText);
+    }
+    sendResponse?.({ ok: true });
+    return true;
+  }
   if (message?.type === "JAPANESE_TEXT_CAPTURED") {
+    if (sender?.tab?.id) {
+      lastCaptureSource.tabId = sender.tab.id;
+      lastCaptureSource.frameId = typeof sender.frameId === "number" ? sender.frameId : null;
+    }
     identify(message.text);
     sendResponse?.({ok: true});
     return true;
@@ -1442,6 +2065,8 @@ if (typeof chrome !== "undefined" && chrome.storage?.onChanged) {
     }
   });
 }
+
+loadAutoCapturePreferences();
 
 chrome.runtime.sendMessage({type: "GET_MINING_MODE"}).then(res => {
   if (res?.enabled) updateMiningUI(true);

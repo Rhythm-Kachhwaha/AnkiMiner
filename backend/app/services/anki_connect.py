@@ -151,6 +151,23 @@ class AnkiConnectService:
             raise AnkiResponseError(f"Expected list of field names for model '{model_name}', got {type(result).__name__}")
         return [str(f) for f in result]
 
+    def store_media_file(self, filename: str, data_bytes: bytes | None = None, base64_data: str | None = None) -> str:
+        """
+        Store a media file in Anki's media collection using storeMediaFile action.
+        Accepts raw data bytes or base64 encoded string.
+        """
+        import base64 as b64_mod
+        clean_name = os.path.basename(filename)
+        if base64_data is not None:
+            b64_payload = base64_data
+        elif data_bytes is not None:
+            b64_payload = b64_mod.b64encode(data_bytes).decode("ascii")
+        else:
+            raise AnkiActionError("No media data provided to store_media_file.")
+
+        result = self._invoke("storeMediaFile", filename=clean_name, data=b64_payload, deleteExisting=False)
+        return str(result or clean_name)
+
     def find_existing_note(self, deck_name: str, expression: str, reading: str = "") -> int | None:
         """
         Query AnkiConnect for notes in the deck matching normalized expression and reading.
@@ -236,9 +253,17 @@ class AnkiConnectService:
 
     def _model_supports_card(self, field_names: list[str]) -> bool:
         """Check if model fields contain at least one prompt field and one answer field."""
-        fields_clean = {f.lower().replace(" ", "").replace("_", "") for f in field_names}
-        has_prompt = bool(fields_clean.intersection({"front", "expression", "word", "japanese", "kanji"}))
-        has_answer = bool(fields_clean.intersection({"back", "meaning", "definition", "glossary", "english"}))
+        fields_clean = {f.lower().replace(" ", "").replace("_", "").replace("-", "") for f in field_names}
+        prompt_keywords = {
+            "front", "expression", "word", "japanese", "kanji", "targetword",
+            "vocabulary", "vocabkanji", "headword", "vocab"
+        }
+        answer_keywords = {
+            "back", "meaning", "definition", "glossary", "english", "vocabmeaning",
+            "primarymeaning", "englishmeaning", "vocabdef"
+        }
+        has_prompt = bool(fields_clean.intersection(prompt_keywords))
+        has_answer = bool(fields_clean.intersection(answer_keywords))
         return has_prompt and has_answer
 
     def resolve_note_model(self) -> tuple[str, list[str]]:
@@ -293,6 +318,37 @@ class AnkiConnectService:
         fields = self.get_model_field_names(first)
         return first, fields
 
+    def get_model_capabilities(self, model_name: str | None = None) -> dict[str, Any]:
+        """
+        Inspect capabilities of a model in Anki.
+        If model_name is not provided, resolves the default note model.
+        Returns dict with model_name, fields, supports_image, supports_audio, supports_sentence.
+        """
+        if model_name and model_name.strip():
+            chosen_model = model_name.strip()
+            fields = self.get_model_field_names(chosen_model)
+        else:
+            chosen_model, fields = self.resolve_note_model()
+
+        fields_clean = {f.lower().replace(" ", "").replace("_", "").replace("-", "") for f in fields}
+
+        image_keywords = {"image", "picture", "screenshot", "photo", "sentenceimage", "vocabimage"}
+        supports_image = bool(fields_clean.intersection(image_keywords))
+
+        audio_keywords = {"audio", "sound", "voice", "pronunciation", "sentenceaudio", "vocabaudio"}
+        supports_audio = bool(fields_clean.intersection(audio_keywords))
+
+        sentence_keywords = {"examplesentence", "sentenceexpression", "sentence", "sentences", "example", "examples"}
+        supports_sentence = bool(fields_clean.intersection(sentence_keywords))
+
+        return {
+            "model_name": chosen_model,
+            "fields": fields,
+            "supports_image": supports_image,
+            "supports_audio": supports_audio,
+            "supports_sentence": supports_sentence,
+        }
+
     def map_card_to_fields(self, card: dict[str, Any], model_fields: list[str]) -> dict[str, str]:
         """
         Deterministically map card fields to the model's fields.
@@ -309,6 +365,10 @@ class AnkiConnectService:
         example = card.get("example_sentence", "")
         example_trans = card.get("example_translation", "")
         notes = card.get("notes", "")
+
+        # Media values
+        raw_img = (card.get("image") or "").strip()
+        raw_aud = (card.get("audio") or "").strip()
 
         # Check if model is standard Front/Back (Basic)
         if "front" in fields_lower and "back" in fields_lower:
@@ -339,10 +399,10 @@ class AnkiConnectService:
                 field_map[fields_lower["word"]] = expr
             if "reading" in fields_lower and reading:
                 field_map[fields_lower["reading"]] = reading
-            if "audio" in fields_lower and card.get("audio"):
-                field_map[fields_lower["audio"]] = card["audio"]
-            if "image" in fields_lower and card.get("image"):
-                field_map[fields_lower["image"]] = card["image"]
+            if "audio" in fields_lower and raw_aud:
+                field_map[fields_lower["audio"]] = raw_aud
+            if "image" in fields_lower and raw_img:
+                field_map[fields_lower["image"]] = raw_img
 
             return field_map
 
@@ -357,15 +417,15 @@ class AnkiConnectService:
                         field_map[real_name] = value
                         return
 
-        assign(("expression", "japanese", "word", "front", "kanji", "vocabkanji", "vocab"), expr)
-        assign(("reading", "furigana", "kana", "vocabfurigana", "vocabreading"), reading)
-        assign(("meaning", "glossary", "english", "definition", "back", "vocabdef", "vocabmeaning"), meaning)
+        assign(("expression", "japanese", "word", "front", "kanji", "vocabkanji", "vocab", "targetword", "vocabulary", "headword"), expr)
+        assign(("reading", "furigana", "kana", "vocabfurigana", "vocabreading", "kanareading", "readingfurigana"), reading)
+        assign(("meaning", "glossary", "english", "definition", "back", "vocabdef", "vocabmeaning", "meaningglossary", "primarymeaning", "englishmeaning"), meaning)
         assign(("hint",), hint)
         assign(("examplesentence", "sentenceexpression", "sentence", "sentences", "example", "examples"), example)
         assign(("exampletranslation", "sentencetranslation", "sentenceenglish", "examplesentencemeaning", "translation"), example_trans)
         assign(("notes", "note", "comment"), notes)
-        assign(("image", "picture", "sentenceimage"), card.get("image", ""))
-        assign(("audio", "sound", "sentenceaudio"), card.get("audio", ""))
+        assign(("image", "picture", "sentenceimage", "vocabimage", "screenshot", "photo"), raw_img)
+        assign(("audio", "sound", "sentenceaudio", "vocabaudio", "voice", "pronunciation"), raw_aud)
 
         # Ensure at least the first model field is populated
         if model_fields and model_fields[0] not in field_map:

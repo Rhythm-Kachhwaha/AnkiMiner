@@ -410,3 +410,59 @@ class TestAnkiConnectService:
             mock_resolve.assert_called_once()
             assert len(invoked_payloads) == 1
             assert invoked_payloads[0]["note"]["modelName"] == "Resolved Model"
+
+    def test_get_model_capabilities_basic(self):
+        service = AnkiConnectService()
+        with patch.object(service, "get_model_field_names", return_value=["Front", "Back"]):
+            caps = service.get_model_capabilities("Basic")
+            assert caps["model_name"] == "Basic"
+            assert caps["supports_image"] is False
+            assert caps["supports_audio"] is False
+            assert caps["supports_sentence"] is False
+
+    def test_get_model_capabilities_rich_mining_model(self):
+        service = AnkiConnectService()
+        with patch.object(service, "get_model_field_names", return_value=["Expression", "Reading", "Meaning", "Sentence", "Audio", "Image"]):
+            caps = service.get_model_capabilities("Mining")
+            assert caps["model_name"] == "Mining"
+            assert caps["supports_image"] is True
+            assert caps["supports_audio"] is True
+            assert caps["supports_sentence"] is True
+
+    def test_map_card_graceful_omission_when_model_lacks_media_fields(self):
+        service = AnkiConnectService()
+        card_data = {
+            "expression": "山",
+            "reading": "やま",
+            "meaning": "mountain",
+            "image": "mountain.jpg",
+            "audio": "mountain.mp3",
+        }
+        # Model only has Expression, Reading, Meaning (no Image or Audio)
+        fields = service.map_card_to_fields(card_data, ["Expression", "Reading", "Meaning"])
+        assert fields["Expression"] == "山"
+        assert fields["Reading"] == "やま"
+        assert fields["Meaning"] == "mountain"
+        assert "Image" not in fields
+        assert "Audio" not in fields
+
+    def test_api_get_model_capabilities_endpoint(self):
+        from fastapi.testclient import TestClient
+        from app.main import app
+
+        client = TestClient(app)
+        with patch.object(AnkiConnectService, "get_model_capabilities", return_value={
+            "model_name": "Japanese Vocab",
+            "fields": ["Word", "Reading", "Meaning", "Audio", "Picture"],
+            "supports_image": True,
+            "supports_audio": True,
+            "supports_sentence": False,
+        }):
+            res = client.get("/api/anki/model-capabilities?model_name=Japanese%20Vocab")
+            assert res.status_code == 200
+            data = res.json()
+            assert data["connected"] is True
+            assert data["model_name"] == "Japanese Vocab"
+            assert data["supports_image"] is True
+            assert data["supports_audio"] is True
+            assert data["supports_sentence"] is False

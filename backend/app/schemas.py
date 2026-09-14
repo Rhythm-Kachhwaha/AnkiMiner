@@ -79,8 +79,11 @@ class SaveCardRequest(BaseModel):
     hint: str = Field(default="", max_length=500)
     example_sentence: str = Field(default="", max_length=1000)
     example_translation: str = Field(default="", max_length=1000)
-    image: str = Field(default="", max_length=500)
-    audio: str = Field(default="", max_length=500)
+    image: str = Field(default="", max_length=5_000_000)
+    audio: str = Field(default="", max_length=10_000_000)
+    image_data: Optional[str] = Field(default=None, max_length=10_000_000)
+    audio_data: Optional[str] = Field(default=None, max_length=20_000_000)
+    media_mime_type: Optional[str] = Field(default=None, max_length=100)
     tags: str = Field(default="", max_length=500)
     notes: str = Field(default="", max_length=2000)
     source_text: str = Field(default="", max_length=500)
@@ -137,6 +140,16 @@ class AnkiDecksResponse(BaseModel):
 class AnkiModelsResponse(BaseModel):
     models: list[str] = ["Basic"]
     connected: bool = True
+
+
+class AnkiModelCapabilitiesResponse(BaseModel):
+    connected: bool = True
+    model_name: str = "Basic"
+    fields: list[str] = ["Front", "Back"]
+    supports_image: bool = False
+    supports_audio: bool = False
+    supports_sentence: bool = False
+    error: Optional[str] = None
 
 
 class SyncCardResponse(BaseModel):

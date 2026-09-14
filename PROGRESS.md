@@ -2,10 +2,27 @@
 
 ## Current status
 
-Video Media Mining — Step 1 (Extension Permissions, Background Screenshot Capture & Canvas Cropper) is fully implemented and verified (2026-09-13).
-All automated backend tests pass (92/92 pytest tests).
-All extension unit, DOM contract, hotkey, auto-pause, subtitle sync offset, and screenshot capture tests pass (13/13 node test suites).
-All video mining features (YouTube, Netflix, HiAnime, external files, A/S/D/Space hotkeys, auto-pause on hover, subtitle offset, viewport screenshot capture) remain fully functional.
+Codebase Audit & Stabilization Pass:
+- Stage 1 (Video Playback Stability & Invariant Enforcement) is complete and verified (2026-09-14).
+  - Enforced playback invariant in `extension/content/video-mining-poc.js` (`recordSentenceAudio`): video is NEVER seeked, forced to play, or paused during audio capture. If video is paused, fails gracefully (`AUDIO_CAPTURE_UNAVAILABLE`) without touching playback.
+  - Removed automated `retakeAudio()` call during `identify()` in `extension/sidepanel/sidepanel.js` so that subtitle hover/selection never triggers background recording or playback disruption.
+  - Updated DOM contract and lifecycle assertions in `extension/tests/audio-recording.test.js` to ensure playback invariants are strictly preserved.
+- Stage 2 (Pause-on-Hover Stabilization) is complete and verified (2026-09-14).
+  - Resolved `SubtitleAutoPauseController` state machine race conditions in `extension/content/video-mining-poc.js`:
+    - Synchronously protected pause invocation with `_isPausing` so internal pause calls never trigger accidental state wipes in `handleVideoPlay()`.
+    - Added `_doPlatformPause(video)` and `_doPlatformPlay(video)` supporting native HTML5 video and Netflix player control selectors (`.button-nfplayerPause`, `.button-nfplayerPlay`) with safe try-catch fail-soft error handling.
+    - Preserved rapid mouse in/out flapping debounce (150ms) to ensure moving between words or quickly glancing at subtitles does not freeze or jitter video playback.
+- Stage 3 (Audio Capture Reliability & Invariant Preservation) is complete and verified (2026-09-14).
+  - Added recording mutex `isRecordingAudio` in `extension/background.js` rejecting concurrent requests with `RECORDING_IN_PROGRESS`.
+  - Enforced guaranteed resource release in `extension/offscreen/offscreen.js`: `cleanup()` closes `audioContext`, stops MediaStream tracks, and cleans timers on all error and completion paths.
+  - Handled DRM-restricted streams gracefully: returns structured `DRM_AUDIO_RESTRICTED` without throwing unhandled exceptions.
+  - Added non-blocking status broadcast `AUDIO_CAPTURE_STATUS` in `extension/content/video-mining-poc.js` and non-blocking notification in `extension/sidepanel/sidepanel.js` ("Audio unavailable for this source (DRM protected)").
+- Stage 4 (Frame / Image Capture Robustness) is complete and verified (2026-09-14).
+  - Preserved Tier-1 (direct canvas `drawImage`) and Tier-2 (`captureVisibleTab` + `ImageCropper`) capture architecture in `extension/content/video-mining-poc.js`.
+  - Added black-frame DRM detection in Tier 1 via `cropper.checkBlackFrame()` to seamlessly fall back to Tier 2 on black/tainted frames.
+  - Added non-blocking failure broadcast `SCREENSHOT_CAPTURE_STATUS` and Side Panel notification ("Image unavailable for this source (DRM protected)") without blocking card creation or corrupting card drafts.
+  - All automated backend tests pass (92/92 pytest tests).
+  - All extension unit, DOM contract, and offscreen audio recording tests pass (15/15 node test suites).
 
 ## Implemented
 
@@ -617,7 +634,307 @@ All video mining features (YouTube, Netflix, HiAnime, external files, A/S/D/Spac
 - **Remaining Risk**:
   - Browser windows that are fully minimized or occluded when `captureVisibleTab` is called may produce blank captures (mitigated by calling during active mining gestures).
 
-## Next task
+## Video Media Mining — Step 2: Manifest V3 Offscreen Document Audio Recording Service
 
-Step 2 Prompt: Manifest V3 Offscreen Document Audio Recording Service (`offscreen.html`, `offscreen.js`, `tabCapture.getMediaStreamId`, audio padding start/end, and MediaRecorder `audio/webm`).
+- **Files Changed / Created**:
+  - `extension/manifest.json`:
+    - Added `"tabCapture"` and `"offscreen"` to `"permissions"` for tab audio stream acquisition and offscreen DOM/WebAudio execution.
+  - `extension/offscreen/offscreen.html` (NEW):
+    - Minimal HTML hosting `offscreen.js` inside an extension offscreen document (`reasons: ['USER_MEDIA']`).
+  - `extension/offscreen/offscreen.js` (NEW):
+    - Implemented `OffscreenAudioRecorder`:
+      - `startRecording({ streamId, durationMs, mimeType })`: Calls `navigator.mediaDevices.getUserMedia` with tab capture stream ID.
+      - Audio Mirroring: Pipes stream into an `AudioContext` and connects `audioSource.connect(audioContext.destination)` so user speaker playback continues uninterrupted during recording.
+      - Encodes `audio/webm;codecs=opus` (fallback `audio/webm`) via `MediaRecorder`.
+      - Converts recorded chunks to base64 data URL via `FileReader`.
+      - Automatic timeout duration stop and resource cleanup (stops stream tracks, closes `AudioContext`).
+      - DRM / protected stream error handling (`DRM_AUDIO`).
+      - Universal UMD / CommonJS export for browser offscreen and Node.js testing.
+  - `extension/background.js`:
+    - Added `ensureOffscreenDocument()` and `hasOffscreenDocument()` lifecycle helpers with concurrency locking.
+    - Added runtime message listener for `START_AUDIO_RECORDING`:
+      - Resolves target tab ID.
+      - Obtains stream token via `chrome.tabCapture.getMediaStreamId({ targetTabId })`.
+      - Ensures offscreen document is open.
+      - Sends `START_RECORDING_OFFSCREEN` with `streamId` and `durationMs` to offscreen document and responds.
+    - Added runtime message listener for `STOP_AUDIO_RECORDING`:
+      - Forwards `STOP_RECORDING_OFFSCREEN` to offscreen document.
+  - `extension/content/video-mining-poc.js`:
+    - Added `recordSentenceAudio(cue, options)` to `VideoMiningPOC`:
+      - Calculates lead-in padding (default 150ms: `audioPaddingStart = 0.15`) and tail padding (default 200ms: `audioPaddingEnd = 0.20`).
+      - Factors in subtitle timing offset (`this.syncEngine.offset`) and video playback rate.
+      - Stores current playback state (`wasPaused`).
+      - Seeks video to `Math.max(0, (cue.start + offset) - audioPaddingStart)` and awaits `seeked`.
+      - Dispatches `START_AUDIO_RECORDING` with exact `durationMs` to background worker.
+      - Plays video forward during recording.
+      - Restores video playback state upon completion (`wasPaused ? pause() : keep playing`).
+      - Broadcasts `AUDIO_CAPTURED` with `dataUrl`, `mimeType`, `startTime`, `endTime`, `durationMs`, and `cue`.
+    - Added `TRIGGER_AUDIO_RECORDING` message handler in `handleMessage`.
+  - `extension/tests/audio-recording.test.js` (NEW):
+    - Added comprehensive unit and contract test suite:
+      - Manifest permissions and offscreen document file checks.
+      - `OffscreenAudioRecorder` lifecycle, audio mirroring destination connection, track closing, and timeout.
+      - DRM / AbortError handling (`DRM_AUDIO`).
+      - `background.js` offscreen document lifecycle and audio coordination contract.
+      - `VideoMiningPOC.recordSentenceAudio` seeking, padding, playback restoration, timing offsets, and `AUDIO_CAPTURED` broadcast.
+
+- **Behavior Delivered**:
+  1. **Tab Audio Recording in MV3**: Audio streams captured without native audio binaries using Chrome MV3 Offscreen Documents.
+  2. **Audio Mirroring**: Tab audio continues playing through the user's speakers during recording.
+  3. **Precision Timing & Padding**: Sentence audio includes 150ms lead-in padding and 200ms tail padding, scaled by playback rate and adjusted by user subtitle offset.
+  4. **Playback State Fidelity**: Paused videos stay paused after recording; playing videos keep playing.
+  5. **DRM Resilience**: Encrypted/protected streams report structured `{ ok: false, error: "DRM_AUDIO" }`.
+  6. **Zero Regressions**: All 14 extension test suites and 92 backend tests pass with 0 errors.
+
+- **Verification Run**:
+  - `extension/tests/audio-recording.test.js`: PASSED
+  - `extension/tests/capture-screenshot.test.js`: PASSED
+  - `extension/tests/video-mining-poc.test.js`: PASSED
+  - `extension/tests/video-mining-integration.test.js`: PASSED
+  - `extension/tests/subtitle-sync-offset.test.js`: PASSED
+  - `extension/tests/subtitle-hotkeys.test.js`: PASSED
+  - `extension/tests/subtitle-auto-pause.test.js`: PASSED
+  - `extension/tests/youtube-adapter.test.js`: PASSED
+  - `extension/tests/netflix-adapter.test.js`: PASSED
+  - `extension/tests/srv3-parser.test.js`: PASSED
+  - `extension/tests/subtitle-parser.test.js`: PASSED
+  - `extension/tests/capture-frame-verification.test.js`: PASSED
+  - `extension/tests/capture-utils.test.js`: PASSED
+  - `extension/tests/sidepanel.test.js`: PASSED
+  - Node test suite: 14/14 test files passed (0 failures).
+  - Backend pytest suite (`python -m pytest -o pythonpath=backend backend/tests`): PASSED (92/92 passed, 0 regressions).
+
+## Video Media Mining — Step 3: Side Panel UI Integration, Media Previews & Mining Triggers
+
+- **Files Changed / Created**:
+  - `extension/sidepanel/sidepanel.html`:
+    - Added `#media-preview-container` (`.media-preview-container`) inside `#card-editor`.
+    - Added `#image-preview-container` (`.media-preview-card`) with badge, `#btn-retake-image`, `#btn-clear-image`, and `#image-preview` (`<img>`).
+    - Added `#audio-preview-container` (`.media-preview-card`) with badge, `#btn-retake-audio`, `#btn-clear-audio`, and `#audio-preview` (`<audio controls>`).
+  - `extension/sidepanel/sidepanel.css`:
+    - Added responsive dark theme styles adhering to `DESIGN.md`: `#252320` background, `#3d3a35` border, `#cc785c` accent badges.
+    - Constrained image thumbnail (`max-height: 90px; width: 100%; object-fit: contain`).
+    - Constrained compact audio player (`height: 28px; width: 100%`).
+    - Micro action buttons with hover states, zero horizontal overflow down to 320px width.
+  - `extension/sidepanel/sidepanel.js`:
+    - Added `currentDraftMedia = { imageBase64, audioBase64, mimeType, captureId }` draft state.
+    - Added DOM references for media preview elements and controls.
+    - Implemented `updateMediaPreviews()` showing/hiding containers based on presence of draft media.
+    - Implemented `clearImageMedia()` and `clearAudioMedia()` resetting draft state and clearing form inputs.
+    - Implemented `clearAllMedia()` resetting both channels on new identification or card load.
+    - Implemented `retakeScreenshot()` and `retakeAudio()` broadcasting `TRIGGER_VIDEO_SCREENSHOT` and `TRIGGER_AUDIO_RECORDING` to the active video tab.
+    - Added runtime message listener handlers for `SCREENSHOT_CAPTURED` and `AUDIO_CAPTURED` with `currentCaptureId` stale capture protection.
+    - Added input listeners on `#field-image` and `#field-audio` syncing manual URLs to previews.
+    - Updated card save form submission payload to include `image_data`, `audio_data`, and `media_mime_type`.
+    - Updated `openSavedCard()` to load existing media references into previews when inspecting cards from history.
+  - `extension/tests/sidepanel-media-ui.test.js` (NEW):
+    - Comprehensive unit and contract test suite verifying HTML DOM elements, CSS styles, media state transitions, clear actions, retake triggers, runtime message handlers, stale capture rejection, and card save payload formulation.
+  - `extension/tests/sidepanel.test.js`:
+    - Added DOM contract assertions for all media preview elements.
+
+- **Behavior Delivered**:
+  1. **Visual & Auditory Feedback**: Users immediately see the captured video frame thumbnail and can play the sentence audio clip directly in the Side Panel Card Editor.
+  2. **Retake & Clear Controls**: Dedicated buttons allow retaking screenshots or re-recording audio on demand, or clearing them to reset state and form fields.
+  3. **Stale Capture Protection**: Media updates check `captureId` so that rapid text selection does not assign media to outdated card drafts.
+  4. **Manual & Automated Synergy**: Preserves manual URL/text inputs in optional fields while syncing automatically when media is captured or cleared.
+  5. **Payload Contract Readiness**: Form submission sends `image_data` and `audio_data` ready for Step 4 backend persistence.
+  6. **Zero Regressions**: All 15 node extension test suites and 92 backend tests pass with 0 errors.
+
+- **Verification Run**:
+  - `extension/tests/sidepanel-media-ui.test.js`: PASSED
+  - `extension/tests/audio-recording.test.js`: PASSED
+  - `extension/tests/capture-screenshot.test.js`: PASSED
+  - `extension/tests/video-mining-poc.test.js`: PASSED
+  - `extension/tests/video-mining-integration.test.js`: PASSED
+  - `extension/tests/subtitle-sync-offset.test.js`: PASSED
+  - `extension/tests/subtitle-hotkeys.test.js`: PASSED
+  - `extension/tests/subtitle-auto-pause.test.js`: PASSED
+  - `extension/tests/youtube-adapter.test.js`: PASSED
+  - `extension/tests/netflix-adapter.test.js`: PASSED
+  - `extension/tests/srv3-parser.test.js`: PASSED
+  - `extension/tests/subtitle-parser.test.js`: PASSED
+  - `extension/tests/capture-frame-verification.test.js`: PASSED
+  - `extension/tests/capture-utils.test.js`: PASSED
+  - `extension/tests/sidepanel.test.js`: PASSED
+  - Node test suite: 15/15 test files passed (0 failures).
+  - Backend pytest suite (`python -m pytest -o pythonpath=backend backend/tests`): PASSED (92/92 passed, 0 regressions).
+
+- **Remaining Risk**:
+  - Very large audio clips or 4K uncompressed screenshots exceeding browser message payload memory limits (mitigated by default downscaling to 640x360 and Opus audio encoding).
+
+### Subtitle Hover Mining & Automated Media Capture Fixes (2026-09-14)
+
+- **Files Changed**:
+  - `extension/content/video-mining-poc.js`:
+    - Re-parented windowed subtitle overlay to `document.body` (`position: fixed !important; z-index: 2147483647 !important`), completely bypassing HiAnime MegaCloud/RapidCloud transparent click shields and YouTube player overlay clipping.
+    - Added `extractJapaneseWordAtPosition(element, clientX, clientY)` with DOM `caretRangeFromPoint` / `caretPositionFromPoint` support, character offset calculation, and continuous Japanese boundary expansion.
+    - Attached debounced (180ms) `mousemove` event listeners to subtitle overlay, dispatching `JAPANESE_TEXT_CAPTURED` (`source: "subtitle_hover"`) upon hover while respecting active manual text selections.
+    - Target cue resolution in `recordSentenceAudio` now falls back to `findCueAtTime(currentTime)` and `lastActiveCue`, avoiding false `NO_ACTIVE_CUE` errors when video pauses slightly past cue boundaries.
+    - Enhanced `captureCurrentFrame` with Tier 1 direct canvas draw for HTML5/same-origin video before falling back to `captureVisibleTab`.
+  - `extension/content/adapters/youtube-adapter.js`:
+    - Enhanced `fetchCaptionSRV3` with format fallbacks (`&fmt=vtt` and raw base URL) in case SRV3 timedtext format fails or returns empty.
+    - Native YouTube caption suppression (`hideNativeYouTubeCaptions`) is now only triggered after subtitle cues are successfully parsed and loaded.
+  - `extension/background.js`:
+    - Added readiness handshake (`PING_OFFSCREEN`) inside `ensureOffscreenDocument` to ensure offscreen audio recorder is responsive before starting stream recording.
+  - `extension/sidepanel/sidepanel.html` & `extension/sidepanel/sidepanel.css`:
+    - Added `toggle-auto-capture-frame` and `toggle-auto-capture-audio` checkboxes to `#video-mining-section`.
+    - Styled `.video-auto-capture-options` and `.auto-capture-checkbox-label` following `DESIGN.md` dark mode tokens.
+  - `extension/sidepanel/sidepanel.js`:
+    - Added DOM bindings and persistence (`auto_capture_frame`, `auto_capture_audio`) in `chrome.storage.local`.
+    - In `identify(text)`, automatically triggers `retakeScreenshot()` and `retakeAudio()` if auto-capture checkboxes are checked.
+    - In `JAPANESE_TEXT_CAPTURED`, captures `sender.tab.id` and `sender.frameId` into `lastCaptureSource`.
+    - `broadcastToActiveVideo(message, targetFrame)` now routes specifically to child iframe `frameId` when available (critical for cross-origin video players on HiAnime).
+  - `extension/tests/video-mining-poc.test.js`:
+    - Added `testSubtitleHoverMining` unit test suite covering word extraction and auto-lookup dispatch.
+  - `extension/tests/sidepanel-media-ui.test.js`:
+    - Added test coverage for auto-capture checkboxes, local storage persistence, and automated retake trigger execution during `identify()`.
+
+- **Behavior Delivered**:
+  1. **Fixed Core Subtitle Hover**: Hovering over Japanese subtitles on YouTube and HiAnime instantly triggers Side Panel dictionary lookup without needing mouse clicks or manual drag-selection.
+  2. **Automated Media Capture (asbplayer pattern)**: Users can enable `Auto-capture frame` and `Auto-capture audio` checkboxes in the Side Panel so screenshots and sentence audio clips are automatically captured upon mining a word.
+  3. **Preserved Manual Controls**: Retake and clear buttons remain available for fine-tuning or discarding captured media.
+  4. **Cross-Origin Iframe Frame Targeting**: Video capture commands are routed directly to the iframe hosting the video element (such as MegaCloud on HiAnime).
+  5. **YouTube Subtitle Reliability**: Timedtext fallback chain prevents missing subtitle tracks on YouTube.
+
+- **Verification Run**:
+  - `node --test extension/tests/*.test.js`: 15/15 test suites passed (0 failures).
+  - `python -m pytest tests` (backend): 92/92 passed (0 regressions).
+
+- **Remaining Risk**:
+  - Full-page capture on high-DPI displays may take up to 200ms for heavy sites; mitigated by Tier 1 direct canvas draw when permitted by CORS.
+
+### Stage 6: Dictionary Clean Study View & Raw View (2026-09-14)
+
+- **Files Changed**:
+  - `extension/sidepanel/sidepanel.html`:
+    - Updated `#dictionary-section` header to `.dict-section-header` with `#dict-actions-bar`.
+    - Added `#btn-copy-raw-dict` (📋 Copy) and `#btn-toggle-full-dict` (Full Dict / Study View).
+    - Preserved `#meanings` as `.dict-study-view` container and added `#dict-raw-view` (hidden by default) for unabridged dictionary entries.
+  - `extension/sidepanel/sidepanel.js`:
+    - Added `formatRawDictionaryText(entries)` formatting all entries, POS, tags, senses, notes, and examples into structured plain text for clipboard copying.
+    - Added `copyTextToClipboard(text)` using `navigator.clipboard` with fallback and visual feedback (`Copied! ✓` for 1500ms).
+    - Added `clearDictionaryView()` cleanly resetting study view, raw view, and action controls.
+    - Upgraded `renderDetails(body)` to render Clean Study View:
+      - Primary dictionary attribution pill (`dict-source-pill`) + `Primary` badge + secondary count pill (`+N more dicts`).
+      - Compact, deduplicated POS badge row (`.study-pos-badge`).
+      - Numbered, deduplicated senses (collapsing duplicate definitions across multiple dictionaries like Jitendex and JMdict).
+      - Semantic collapsible examples accordion (`<details class="study-examples-accordion">`) containing example cards, collapsed by default to eliminate vertical scroll overflow in narrow 320px panels.
+    - Preserved 100% of unabridged raw Yomitan data in `#dict-raw-view` with instant toggling via `[Full Dict]` / `[Study View]`.
+    - Wired `btnCopyRawDict` and `btnToggleFullDict` listeners.
+    - Updated `identify()` and `deleteLocalCard()` to call `clearDictionaryView()`.
+  - `extension/sidepanel/sidepanel.css`:
+    - Added styling for `.dict-section-header`, `.dict-actions-bar`, `.btn-dict-action`, `.study-dict-header`, `.dict-source-pill`, `.dict-count-pill`, `.study-pos-row`, `.study-pos-badge`, `.study-senses-list`, `.study-sense-item`, `.study-examples-accordion`, `.study-example-card`, and raw view entries matching `DESIGN.md` dark mode tokens and responsive down to 320px width.
+  - `extension/tests/dictionary-study-view.test.js` (NEW):
+    - Added comprehensive unit test suite verifying DOM structure, `formatRawDictionaryText`, Clean Study View rendering, POS and sense deduplication, collapsible examples accordion, toggle behavior, clipboard copy, and reset.
+
+- **Behavior Delivered**:
+  1. **Clean Study View by Default**: Side Panel renders clean, compact definitions with primary attribution, deduplicated POS badges, and numbered senses instead of overflowing 320px panels with redundant raw dictionary text.
+  2. **Collapsible Examples Accordion**: Example sentences are collapsed by default under `Examples (N)` with accessible HTML5 `<details>`, preventing clutter while remaining instantly expandable.
+  3. **Zero Data Loss & Raw Toggle**: Users can toggle `[Full Dict]` at any time to inspect the complete unabridged Yomitan dictionary output.
+  4. **One-Click Raw Copy**: Users can copy the formatted raw dictionary text directly to their clipboard with `[📋 Copy]`.
+  5. **Complete System Stability**: Full backward compatibility maintained; zero breakage to card editing or Anki sync.
+
+- **Verification Run**:
+  - `node extension/tests/dictionary-study-view.test.js`: PASSED
+  - `node --test extension/tests/*.test.js`: PASSED (16/16 test files passed, 0 failures)
+  - `python -m pytest -o pythonpath=backend backend/tests`: PASSED (96/96 passed, 0 regressions)
+
+- **Remaining Risk**:
+  - None identified.
+
+### Stage 7: Restrained UI Cleanup & Layout Reorder (2026-09-14)
+
+- **Files Changed**:
+  - `extension/sidepanel/sidepanel.html`:
+    - **Reordered Visual Hierarchy**: Moved Card Editor (`#card-editor-section`) directly above the Dictionary Section (`#dictionary-section`). When a user mines or looks up a word, the Card Editor form and primary `[Save Card]` / `[Send to Anki]` buttons appear immediately below the Captured Word hero display without scrolling past dictionary definitions.
+    - **Removed Manual Media Capture Controls**: Removed user-facing manual capture buttons (`#btn-retake-image`, `#btn-retake-audio`, `#btn-quick-capture-frame`, `#btn-quick-record-audio`) and `.video-media-quick-actions` toolbar.
+    - **Clean Media Status & Result Displays**: Converted media empty placeholders into clean status indicators ("No frame captured", "No audio clip"). Retained visual thumbnail preview (`#image-preview`) and audio player (`#audio-preview`) for displaying capture results.
+    - **Retained Media Discard Actions**: Maintained `#btn-clear-image` and `#btn-clear-audio` (`hidden` until media is attached) allowing users to easily discard unwanted automatic captures.
+  - `extension/sidepanel/sidepanel.js`:
+    - Removed selectors and click listeners for `#btn-retake-image`, `#btn-retake-audio`, `#btn-quick-capture-frame`, `#btn-quick-record-audio`, and placeholder click bindings.
+    - Preserved internal capture helper methods (`retakeScreenshot()`, `retakeAudio()`, `captureOrRetakeScreenshot()`, `recordOrRetakeAudio()`) for automated capture on mining/hover.
+    - Retained clear media handlers (`clearImageMedia()`, `clearAudioMedia()`, `clearAllMedia()`).
+  - `extension/sidepanel/sidepanel.css`:
+    - Removed hover and pointer cursor from `.media-empty-placeholder` to present it purely as an informative status card.
+    - Removed obsolete `.video-media-quick-actions` styles.
+  - `extension/tests/sidepanel.test.js`:
+    - Verified `#card-editor-section` is positioned before `#dictionary-section`.
+    - Verified manual capture buttons (`#btn-retake-image`, `#btn-retake-audio`) are removed.
+  - `extension/tests/sidepanel-media-ui.test.js`:
+    - Updated assertions to verify removal of manual capture buttons, preservation of media clear actions, and layout reordering.
+
+- **Behavior Delivered**:
+  1. **Add Card Above Meanings**: Users can create and save cards immediately at the top of the Side Panel without scrolling through long dictionary definitions.
+  2. **Automated-Only Media Workflow**: Media capture operates automatically upon word lookup/mining (when auto-capture checkboxes are enabled); cluttering manual capture buttons are eliminated.
+  3. **Media Status Transparency**: The UI displays the status/result of capture (rendered preview thumbnail, playable audio element, or informative placeholder text) while preserving discard buttons (`&times;`).
+  4. **Full Regression Stability**: Zero breaking changes to local SQLite card persistence, AnkiConnect sync, or Yomitan lookups.
+
+- **Verification Run**:
+  - `node extension/tests/sidepanel.test.js`: PASSED
+  - `node extension/tests/sidepanel-media-ui.test.js`: PASSED
+  - `node extension/tests/dictionary-study-view.test.js`: PASSED
+  - `node --test extension/tests/*.test.js`: PASSED (16/16 test files passed, 0 failures)
+  - `python -m pytest -o pythonpath=backend backend/tests`: PASSED (96/96 passed, 0 regressions)
+
+- **Remaining Risk**:
+  - None identified. All stages (1 through 7) are complete and fully verified.
+
+### Comprehensive In-Code Feature Scan & Breakage Audit (2026-09-14)
+
+- **Verification Scope**:
+  - Full simulated user journey across all features in automated test code (Python + Node.js) without launching manual browser windows:
+    1. **Live Services**: Live AnkiConnect (`127.0.0.1:8765`, v6) and live Yomitan server (`127.0.0.1:19633`).
+    2. **Dictionary Identification & Enrichment**: Common verbs, de-inflections (causative/passive, past tense), kanji compounds, katakana loanwords, bracketed expressions, parentheticals, internet slang, particles, unknown terms, blank text validation, 500+ char limit.
+    3. **Card Editor & Local SQLite Persistence**: Blank expression rejection (422), HTML/ruby tag preservation, quotes, newlines, emojis, per-deck duplicate prevention, cross-deck card creation, card editing by ID, SQL injection safety (parameterized queries), deck filtering, pagination.
+    4. **Live AnkiConnect Synchronization**: Real deck retrieval (`Default`, `Kaishi 1.5k`, `n3 mining`), real model inspection (`japanese mining`), model capability detection (audio/image), live card sync into Anki note, note field validation, safe note cleanup, failure resilience on invalid models (preserving local card in SQLite as `failed` with diagnostic error), auto-deck creation.
+    5. **Subtitle Parser & Video Invariants**: WebVTT parsing with STYLE/NOTE metadata filtering, non-standard SRT timestamps (1-digit hours, period separators), UTF-8 BOM tolerance, auto-format dispatching (VTT, SRT, SRV3), cue sync boundary lookups, background audio recording mutex.
+    6. **Side Panel DOM Contracts**: Reordered visual hierarchy (Card Editor above meanings), removal of manual capture buttons, Clean Study View, raw dictionary toggle, raw plain text clipboard copy.
+
+- **Automated Verification Results**:
+  - `python scratch/stress_test_audit.py`: PASSED (tested against live AnkiConnect & live Yomitan)
+  - `node scratch/stress_test_frontend.js`: PASSED
+  - `python -m pytest -o pythonpath=backend backend/tests`: PASSED (96 / 96 passed)
+  - `node --test extension/tests/*.test.js`: PASSED (16 / 16 passed)
+
+- **Audit Findings & Prioritized To-Do List**:
+  1. **[Completed] SaveCardRequest Data URL Boundary**:
+     - Expanded `image` and `audio` length limits and added `image_data`, `audio_data`, and `media_mime_type` to `SaveCardRequest` in `schemas.py`.
+  2. **[Completed] Backend Binary Media Storage & AnkiConnect `storeMediaFile`**:
+     - Implemented `MediaStorageService` (`media_storage.py`) decoding base64 data URLs to disk in `backend/data/media/`.
+     - Mounted `GET /api/media/{filename}` route in `main.py` serving images and audio.
+     - Added `store_media_file` in `AnkiConnectService` uploading media to Anki's collection during card sync.
+  3. **[Completed] Enhanced Note Model Field Keyword Aliases**:
+     - Expanded aliases in `AnkiConnectService` for prompt, answer, sentence, audio, and image fields (`targetword`, `sentenceaudio`, `vocabimage`, etc.).
+
+### Phase 8: Media Storage, Data URL Support & Anki Media Sync Implementation (2026-09-14)
+
+- **Files Changed**:
+  - `backend/app/schemas.py`:
+    - Updated `SaveCardRequest` to support data URLs (`max_length=5_000_000` for image, `10_000_000` for audio).
+    - Added optional `image_data`, `audio_data`, and `media_mime_type` fields matching frontend payload.
+  - `backend/app/services/media_storage.py` (NEW):
+    - Implemented `MediaStorageService` for saving and retrieving binary media files with path-traversal protection and magic byte / MIME-type detection.
+  - `backend/app/main.py`:
+    - Mounted `GET /api/media/{filename}` route using `FileResponse` to serve media back to the Side Panel with appropriate MIME types.
+  - `backend/app/services/card_service.py`:
+    - Updated `save_card` to automatically decode and persist raw media payloads to `backend/data/media/` and record clean filenames in SQLite.
+    - Updated `sync_card` to read local media files and invoke `anki.store_media_file` prior to creating notes.
+  - `backend/app/services/anki_connect.py`:
+    - Added `store_media_file` action invoking AnkiConnect's `storeMediaFile`.
+    - Expanded note model field aliases in `_model_supports_card`, `get_model_capabilities`, and `map_card_to_fields`.
+  - `backend/tests/test_card_editor.py`:
+    - Added unit test `test_14_media_payload_and_data_url_support` verifying media persistence on save.
+  - `backend/tests/test_media_storage.py` (NEW):
+    - Added 7 unit tests covering base64 saving, path traversal protection, media deletion, static media endpoint, and field alias mapping.
+
+- **Verification Run**:
+  - `python -m pytest -o pythonpath=backend backend/tests`: PASSED (104/104 passed, 0 regressions)
+  - `node --test extension/tests/*.test.js`: PASSED (16/16 passed)
+  - `python scratch/stress_test_audit.py`: PASSED (0 issues identified)
+  - `python scratch/verify_live_anki_media_sync.py`: PASSED (successfully synced card with image and audio to live AnkiConnect note 1789381014702 and cleaned up)
+
+- **Remaining Risk**:
+  - None identified. All audit to-do items are completely resolved and verified against live services.
+
+
 

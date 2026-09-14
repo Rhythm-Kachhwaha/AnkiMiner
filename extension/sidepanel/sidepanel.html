@@ -93,6 +93,17 @@
           <div class="cue-preview-label">Active Subtitle:</div>
           <div id="video-current-cue-preview" class="video-cue-preview">—</div>
         </div>
+
+        <div class="video-auto-capture-options">
+          <label class="auto-capture-checkbox-label" title="Automatically capture a video frame screenshot whenever you mine/lookup a word">
+            <input type="checkbox" id="toggle-auto-capture-frame" checked>
+            <span>Auto-capture frame</span>
+          </label>
+          <label class="auto-capture-checkbox-label" title="Automatically record sentence audio whenever you mine/lookup a word">
+            <input type="checkbox" id="toggle-auto-capture-audio" checked>
+            <span>Auto-capture audio</span>
+          </label>
+        </div>
       </section>
     </div>
 
@@ -104,16 +115,7 @@
       </div>
     </section>
 
-    <!-- Dictionary Information Section -->
-    <section id="dictionary-section" class="dictionary-section" aria-live="polite">
-      <div class="section-header">
-        <span class="section-title">DICTIONARY</span>
-      </div>
-      <div id="meanings" class="details"></div>
-      <div id="examples" class="details"></div>
-    </section>
-
-    <!-- Card Editor Form -->
+    <!-- Card Editor Form (Positioned Above Dictionary) -->
     <section id="card-editor-section" class="card-editor-section">
       <div class="section-header">
         <span class="section-title">CARD</span>
@@ -138,6 +140,43 @@
         <div class="form-group">
           <label for="field-meaning">Meaning</label>
           <textarea id="field-meaning" name="meaning" rows="2"></textarea>
+        </div>
+
+        <!-- Media Previews (Screenshot & Sentence Audio) -->
+        <div id="media-preview-container" class="media-preview-container">
+          <!-- Image Preview Card -->
+          <div id="image-preview-container" class="media-preview-card">
+            <div class="media-preview-header">
+              <span class="media-type-badge">IMAGE</span>
+              <div class="media-preview-actions">
+                <button type="button" id="btn-clear-image" class="btn-media-action btn-media-clear" title="Remove image" aria-label="Remove image" hidden>&times;</button>
+              </div>
+            </div>
+            <div class="media-thumbnail-wrapper">
+              <div id="image-empty-placeholder" class="media-empty-placeholder">
+                <span class="media-placeholder-icon">📸</span>
+                <span class="media-placeholder-text">No frame captured</span>
+              </div>
+              <img id="image-preview" class="media-thumbnail" alt="Captured video frame" src="" hidden>
+            </div>
+          </div>
+
+          <!-- Audio Preview Card -->
+          <div id="audio-preview-container" class="media-preview-card">
+            <div class="media-preview-header">
+              <span class="media-type-badge">AUDIO</span>
+              <div class="media-preview-actions">
+                <button type="button" id="btn-clear-audio" class="btn-media-action btn-media-clear" title="Remove audio" aria-label="Remove audio" hidden>&times;</button>
+              </div>
+            </div>
+            <div class="media-audio-wrapper">
+              <div id="audio-empty-placeholder" class="media-empty-placeholder">
+                <span class="media-placeholder-icon">🎙️</span>
+                <span class="media-placeholder-text">No audio clip</span>
+              </div>
+              <audio id="audio-preview" class="media-audio-player" controls preload="metadata" src="" hidden></audio>
+            </div>
+          </div>
         </div>
 
         <div class="form-row-compact">
@@ -210,6 +249,20 @@
           </div>
         </div>
       </form>
+    </section>
+
+    <!-- Dictionary Information Section -->
+    <section id="dictionary-section" class="dictionary-section" aria-live="polite">
+      <div class="section-header dict-section-header">
+        <span class="section-title">DICTIONARY</span>
+        <div class="dict-actions-bar" id="dict-actions-bar" style="display: none;">
+          <button type="button" id="btn-copy-raw-dict" class="btn-dict-action" title="Copy raw dictionary text to clipboard">📋 Copy</button>
+          <button type="button" id="btn-toggle-full-dict" class="btn-dict-action" title="Show full unabridged dictionary">Full Dict</button>
+        </div>
+      </div>
+      <div id="meanings" class="details dict-study-view"></div>
+      <div id="dict-raw-view" class="dict-raw-view" hidden></div>
+      <div id="examples" class="details" hidden></div>
     </section>
 
     <!-- Mining History & Card Library -->

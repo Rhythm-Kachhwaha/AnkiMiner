@@ -2,10 +2,13 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
 from app.db.connection import init_db
+from app.services.media_storage import MediaStorageService
 from app.schemas import (
     AnkiDecksResponse,
+    AnkiModelCapabilitiesResponse,
     AnkiModelsResponse,
     AnkiStatusResponse,
     CaptureRequest,
@@ -72,6 +75,13 @@ def get_anki_models() -> AnkiModelsResponse:
     return service.get_anki_models()
 
 
+@app.get("/api/anki/model-capabilities", response_model=AnkiModelCapabilitiesResponse)
+def get_anki_model_capabilities(model_name: str | None = None) -> AnkiModelCapabilitiesResponse:
+    service = CardService()
+    caps = service.get_model_capabilities(model_name=model_name)
+    return AnkiModelCapabilitiesResponse(**caps)
+
+
 @app.post("/api/cards/{card_id}/sync", response_model=SyncCardResponse)
 def sync_card(card_id: int) -> SyncCardResponse:
     service = CardService()
@@ -117,6 +127,28 @@ def delete_card(card_id: int) -> DeleteCardResponse:
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Card with ID {card_id} does not exist.")
     return DeleteCardResponse(id=card_id, deleted=True)
+
+
+@app.get("/api/media/{filename}")
+def get_media_file(filename: str) -> FileResponse:
+    storage = MediaStorageService()
+    file_path = storage.get_media_path(filename)
+    if not file_path or not file_path.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Media file '{filename}' not found.")
+
+    ext = file_path.suffix.lower()
+    media_types = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".webp": "image/webp",
+        ".webm": "audio/webm",
+        ".wav": "audio/wav",
+        ".mp3": "audio/mpeg",
+        ".ogg": "audio/ogg",
+    }
+    media_type = media_types.get(ext, "application/octet-stream")
+    return FileResponse(file_path, media_type=media_type)
 
 
 

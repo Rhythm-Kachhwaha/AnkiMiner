@@ -140,29 +140,43 @@
   async function fetchCaptionSRV3(srv3Url) {
     if (!srv3Url) return "";
 
-    // 1. Direct fetch (same-origin on youtube.com carries all active session cookies/headers)
+    const candidateUrls = [srv3Url];
+    // If url contains &fmt=srv3 or doesn't have fmt, also try fmt=vtt and the raw base url as fallbacks
     try {
-      const res = await fetch(srv3Url);
-      if (res.ok) {
-        const text = await res.text();
-        if (text && (text.includes("<timedtext") || text.includes("<p ") || text.includes("<transcript"))) {
-          return text;
-        }
+      if (srv3Url.includes("fmt=srv3")) {
+        candidateUrls.push(srv3Url.replace("fmt=srv3", "fmt=vtt"));
+        candidateUrls.push(srv3Url.replace(/&fmt=srv3/, ""));
+      } else if (!srv3Url.includes("fmt=")) {
+        candidateUrls.push(srv3Url + "&fmt=srv3");
+        candidateUrls.push(srv3Url + "&fmt=vtt");
       }
     } catch (_) {}
 
-    // 2. Background service worker fetch fallback
-    try {
-      if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
-        const resp = await chrome.runtime.sendMessage({
-          type: "FETCH_YOUTUBE_TIMEDTEXT",
-          url: srv3Url
-        });
-        if (resp?.ok && resp.text) {
-          return resp.text;
+    for (const url of candidateUrls) {
+      // 1. Direct fetch (same-origin on youtube.com carries all active session cookies/headers)
+      try {
+        const res = await fetch(url);
+        if (res.ok) {
+          const text = await res.text();
+          if (text && (text.includes("<timedtext") || text.includes("<p ") || text.includes("<transcript") || text.includes("WEBVTT"))) {
+            return text;
+          }
         }
-      }
-    } catch (_) {}
+      } catch (_) {}
+
+      // 2. Background service worker fetch fallback
+      try {
+        if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+          const resp = await chrome.runtime.sendMessage({
+            type: "FETCH_YOUTUBE_TIMEDTEXT",
+            url: url
+          });
+          if (resp?.ok && resp.text) {
+            return resp.text;
+          }
+        }
+      } catch (_) {}
+    }
 
     return "";
   }
@@ -198,7 +212,6 @@
     init() {
       if (!isYouTubePage()) return;
 
-      hideNativeYouTubeCaptions();
       this.checkAndLoad();
 
       // Listen for YouTube SPA navigation events and bridge messages
@@ -222,7 +235,6 @@
 
     async checkAndLoad() {
       if (!isYouTubePage()) return;
-      hideNativeYouTubeCaptions();
 
       // Vector 1: Prompt main-world bridge
       if (typeof window !== "undefined" && typeof window.postMessage === "function") {
@@ -306,6 +318,7 @@
       }
 
       if (cues && cues.length > 0 && typeof this.onCuesLoaded === "function") {
+        hideNativeYouTubeCaptions();
         this.onCuesLoaded(cues, track);
       }
     }
