@@ -1597,6 +1597,15 @@
       if (!targetCue && this.syncEngine && Array.isArray(this.syncEngine.cues) && this.syncEngine.cues.length > 0) {
         targetCue = (typeof this.syncEngine.findCueAtTime === "function" ? this.syncEngine.findCueAtTime(this.activeVideo.currentTime) : null) || this.syncEngine.lastActiveCue || null;
       }
+
+      // Fallback: if no cue at all and fallback slice is enabled, synthesize a 3-second slice around currentTime
+      if (!targetCue && (options.fallbackSlice || options.allowFallbackSlice)) {
+        const ct = this.activeVideo.currentTime || 0;
+        const sliceStart = Math.max(0, ct - 0.5);
+        const sliceEnd = ct + 2.5;
+        targetCue = { startTime: sliceStart, endTime: sliceEnd, text: "" };
+      }
+
       const rawStart = typeof targetCue?.start === "number"
         ? targetCue.start
         : (typeof targetCue?.startTime === "number" ? targetCue.startTime : null);
@@ -1705,6 +1714,14 @@
         }
       }
 
+      // Tier 2 Fallback: If background tabCapture failed, try direct video element captureStream
+      if (!recResult?.ok && !options._skipCaptureStreamFallback) {
+        const fallbackResult = await this._captureStreamFallback(durationMs, options);
+        if (fallbackResult?.ok) {
+          recResult = fallbackResult;
+        }
+      }
+
       if (recResult?.ok) {
         try {
           if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
@@ -1735,6 +1752,112 @@
       return recResult;
     }
 
+    /**
+     * Tier-2 fallback: Record audio directly from the video element's captureStream.
+     * Used when background tabCapture fails (gesture restriction, offscreen error, etc).
+     */
+    async _captureStreamFallback(durationMs, options = {}) {
+      try {
+        const video = this.activeVideo;
+        if (!video || !video.isConnected) {
+          return { ok: false, error: "NO_ACTIVE_VIDEO", message: "No video for captureStream fallback" };
+        }
+
+        // Get stream from video element
+        const captureStreamFn = video.captureStream || video.mozCaptureStream;
+        if (typeof captureStreamFn !== "function") {
+          return { ok: false, error: "CAPTURE_STREAM_UNSUPPORTED", message: "captureStream not supported on this video element" };
+        }
+
+        let stream;
+        try {
+          stream = captureStreamFn.call(video);
+        } catch (err) {
+          return { ok: false, error: "CAPTURE_STREAM_FAILED", message: err?.message || "Failed to get captureStream" };
+        }
+
+        if (!stream || !stream.getAudioTracks || stream.getAudioTracks().length === 0) {
+          return { ok: false, error: "NO_AUDIO_TRACKS", message: "No audio tracks in captured stream" };
+        }
+
+        // Create audio-only stream
+        const audioStream = new MediaStream(stream.getAudioTracks());
+
+        const mimeType = options.mimeType || "audio/webm;codecs=opus";
+        const supportedMime = typeof MediaRecorder !== "undefined" && typeof MediaRecorder.isTypeSupported === "function" && MediaRecorder.isTypeSupported(mimeType) ? mimeType : "audio/webm";
+
+        return new Promise((resolve) => {
+          const chunks = [];
+          let recorder;
+          try {
+            recorder = new MediaRecorder(audioStream, { mimeType: supportedMime });
+          } catch (err) {
+            resolve({ ok: false, error: "MEDIARECORDER_FAILED", message: err?.message || "Failed to create MediaRecorder" });
+            return;
+          }
+
+          recorder.ondataavailable = (e) => {
+            if (e.data && e.data.size > 0) {
+              chunks.push(e.data);
+            }
+          };
+
+          recorder.onstop = () => {
+            // Cleanup audio stream tracks
+            try {
+              audioStream.getTracks().forEach(t => t.stop());
+            } catch (_) {}
+
+            if (chunks.length === 0) {
+              resolve({ ok: false, error: "NO_AUDIO_DATA", message: "MediaRecorder produced no data" });
+              return;
+            }
+
+            const blob = new Blob(chunks, { type: supportedMime });
+            const reader = new FileReader();
+            reader.onloadend = () => {
+              resolve({
+                ok: true,
+                dataUrl: reader.result,
+                mimeType: supportedMime,
+                source: "captureStream"
+              });
+            };
+            reader.onerror = () => {
+              resolve({ ok: false, error: "BLOB_READ_FAILED", message: "Failed to read recorded audio blob" });
+            };
+            reader.readAsDataURL(blob);
+          };
+
+          recorder.onerror = (e) => {
+            try {
+              audioStream.getTracks().forEach(t => t.stop());
+            } catch (_) {}
+            resolve({ ok: false, error: "RECORDING_ERROR", message: e?.error?.message || "MediaRecorder error" });
+          };
+
+          recorder.start();
+
+          // Stop after specified duration
+          const safeDuration = Math.max(100, Math.min(durationMs || 3000, 30000));
+          setTimeout(() => {
+            try {
+              if (recorder.state === "recording") {
+                recorder.stop();
+              }
+            } catch (_) {
+              try {
+                audioStream.getTracks().forEach(t => t.stop());
+              } catch (__) {}
+              resolve({ ok: false, error: "STOP_FAILED", message: "Failed to stop MediaRecorder" });
+            }
+          }, safeDuration);
+        });
+      } catch (err) {
+        return { ok: false, error: "CAPTURE_STREAM_EXCEPTION", message: err?.message || "captureStream fallback failed" };
+      }
+    }
+
     handleMessage(message, _sender, sendResponse) {
       if (message?.type === "TRIGGER_VIDEO_SCREENSHOT") {
         this.captureCurrentFrame(message.options).then(res => {
@@ -1745,7 +1868,7 @@
         return true;
       }
       if (message?.type === "TRIGGER_AUDIO_RECORDING") {
-        const audioOpts = Object.assign({ allowPausedPlayback: true }, message.options);
+        const audioOpts = Object.assign({ allowPausedPlayback: true, fallbackSlice: true }, message.options);
         this.recordSentenceAudio(message.cue, audioOpts).then(res => {
           sendResponse?.(res);
         }).catch(err => {

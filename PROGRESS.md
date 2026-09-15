@@ -2,6 +2,14 @@
 
 ## Current status
 
+Audio Recording & Anki Audio Field Sync Fix (2026-09-15):
+- **Backend regex fix**: Fixed `_extract_base64_and_ext` in `backend/app/services/media_storage.py` — regex changed from `r"^data:([^;]+);base64,(.*)$"` to `r"^data:(.*?);base64,(.*)$"` to handle MIME types with parameters like `audio/webm;codecs=opus`. Extension extraction now splits on `;` to get the base MIME for file extension mapping.
+- **Backend error logging**: Replaced silent `except Exception: pass` in `backend/app/services/card_service.py` `save_card` with `logger.warning()` calls for both image and audio media save failures, making future issues diagnosable in server logs.
+- **Extension audio capture enhancements** in `extension/content/video-mining-poc.js`:
+  - Added 3-second fallback slice around `currentTime` when no subtitle cue is available, so audio capture works even without loaded subtitles.
+  - Added Tier-2 `captureStream` fallback in `_captureStreamFallback()`: when background `START_AUDIO_RECORDING` via tabCapture fails (gesture restriction, offscreen error), records directly from `video.captureStream()` using MediaRecorder in the content script. Video frame capture (Tier-1 canvas / Tier-2 captureVisibleTab) is strictly untouched.
+- **Verification**: 110/110 backend pytest tests pass (including 4 new tests for codecs=opus parsing, card save, and Anki field mapping). All 16/16 extension node test suites pass, verifying playback invariants, DOM contracts, and offscreen recording.
+
 Codebase Audit & Stabilization Pass:
 - Stage 1 (Video Playback Stability & Invariant Enforcement) is complete and verified (2026-09-14).
   - Enforced playback invariant in `extension/content/video-mining-poc.js` (`recordSentenceAudio`): video is NEVER seeked, forced to play, or paused during audio capture. If video is paused, fails gracefully (`AUDIO_CAPTURE_UNAVAILABLE`) without touching playback.

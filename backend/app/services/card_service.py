@@ -150,16 +150,16 @@ class CardService:
         if raw_image:
             try:
                 image_val = storage.save_media(raw_image, media_type="image")
-            except Exception:
-                pass
+            except Exception as err:
+                logger.warning("Failed to save image media during card save: %s", err)
 
         audio_val = request.audio or ""
         raw_audio = request.audio_data or (audio_val if audio_val.startswith("data:audio/") else None)
         if raw_audio:
             try:
                 audio_val = storage.save_media(raw_audio, media_type="audio")
-            except Exception:
-                pass
+            except Exception as err:
+                logger.warning("Failed to save audio media during card save: %s", err)
 
         draft = CardDraft(
             expression=request.expression,

@@ -147,6 +147,68 @@ class MediaStorageTests(unittest.TestCase):
         self.assertEqual(mapped_custom["SentenceAudio"], "[sound:ankiminer_audio_456.wav]")
         self.assertEqual(mapped_custom["VocabImage"], '<img src="ankiminer_img_123.jpg">')
 
+    def test_save_audio_webm_codecs_opus(self):
+        """audio/webm;codecs=opus data URLs (Chrome MediaRecorder default) must parse correctly."""
+        sample_audio_bytes = b"fake opus audio payload"
+        sample_audio_b64 = base64.b64encode(sample_audio_bytes).decode("ascii")
+        data_url = f"data:audio/webm;codecs=opus;base64,{sample_audio_b64}"
+
+        filename = self.storage.save_media(data_url, media_type="audio")
+        self.assertTrue(filename.startswith("ankiminer_audio_"), f"Expected ankiminer_audio_ prefix, got {filename}")
+        self.assertTrue(filename.endswith(".webm"), f"Expected .webm extension, got {filename}")
+
+        read_bytes = self.storage.get_media_bytes(filename)
+        self.assertEqual(read_bytes, sample_audio_bytes)
+
+    def test_extract_base64_and_ext_codecs_opus(self):
+        """Regex must handle MIME with parameters (;codecs=opus) before ;base64,"""
+        sample_bytes = b"test audio data"
+        sample_b64 = base64.b64encode(sample_bytes).decode("ascii")
+        data_url = f"data:audio/webm;codecs=opus;base64,{sample_b64}"
+
+        decoded_bytes, ext = self.storage._extract_base64_and_ext(data_url, default_ext="mp3")
+        self.assertEqual(decoded_bytes, sample_bytes)
+        self.assertEqual(ext, "webm")
+
+    def test_save_card_with_codecs_opus_audio_data(self):
+        """Card save pipeline must handle audio/webm;codecs=opus without silently dropping audio."""
+        sample_aud_bytes = b"opus audio clip bytes"
+        sample_aud_b64 = "data:audio/webm;codecs=opus;base64," + base64.b64encode(sample_aud_bytes).decode("ascii")
+
+        req = SaveCardRequest(
+            expression="音声テスト",
+            reading="おんせいてすと",
+            meaning="audio test with codecs",
+            audio_data=sample_aud_b64,
+        )
+
+        service = CardService(card_repository=CardRepository(self.db_path))
+        saved = service.save_card(req)
+
+        self.assertTrue(saved.audio.startswith("ankiminer_audio_"), f"audio field should be saved filename, got: {saved.audio}")
+        self.assertTrue(saved.audio.endswith(".webm"), f"audio extension should be .webm, got: {saved.audio}")
+        self.assertIsNotNone(self.storage.get_media_path(saved.audio))
+
+    def test_anki_field_mapping_audio_from_codecs_opus_save(self):
+        """Anki field mapping must format saved audio filename as [sound:...] tag."""
+        anki = AnkiConnectService()
+
+        card = {
+            "expression": "テスト",
+            "reading": "てすと",
+            "meaning": "test",
+            "audio": "ankiminer_audio_20260915_abc12345.webm",
+        }
+        # Model with dedicated Audio field
+        fields = ["Expression", "Reading", "Meaning", "Audio"]
+        mapped = anki.map_card_to_fields(card, fields)
+        self.assertEqual(mapped["Audio"], "[sound:ankiminer_audio_20260915_abc12345.webm]")
+
+        # Basic model appends to Back
+        fields_basic = ["Front", "Back"]
+        mapped_basic = anki.map_card_to_fields(card, fields_basic)
+        self.assertIn("[sound:ankiminer_audio_20260915_abc12345.webm]", mapped_basic["Back"])
+
 
 if __name__ == "__main__":
     unittest.main()

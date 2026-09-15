@@ -48,24 +48,27 @@ class MediaStorageService:
         detected_ext = default_ext
 
         # Check for data URL scheme: data:<mime>;base64,<payload>
+        # Use lazy (.*?) to handle MIME types with parameters like audio/webm;codecs=opus
         if clean_str.startswith("data:"):
-            match = re.match(r"^data:([^;]+);base64,(.*)$", clean_str, re.DOTALL)
+            match = re.match(r"^data:(.*?);base64,(.*)$", clean_str, re.DOTALL)
             if match:
-                mime_type = match.group(1).lower()
+                full_mime = match.group(1).lower()
                 clean_str = match.group(2)
-                if "jpeg" in mime_type or "jpg" in mime_type:
+                # Extract base MIME type (before any params like ;codecs=opus)
+                base_mime = full_mime.split(";")[0].strip()
+                if "jpeg" in base_mime or "jpg" in base_mime:
                     detected_ext = "jpg"
-                elif "png" in mime_type:
+                elif "png" in base_mime:
                     detected_ext = "png"
-                elif "webp" in mime_type:
+                elif "webp" in base_mime:
                     detected_ext = "webp"
-                elif "webm" in mime_type:
+                elif "webm" in base_mime:
                     detected_ext = "webm"
-                elif "wav" in mime_type:
+                elif "wav" in base_mime:
                     detected_ext = "wav"
-                elif "mpeg" in mime_type or "mp3" in mime_type:
+                elif "mpeg" in base_mime or "mp3" in base_mime:
                     detected_ext = "mp3"
-                elif "ogg" in mime_type:
+                elif "ogg" in base_mime:
                     detected_ext = "ogg"
             else:
                 raise MediaStorageError("Malformed data URL scheme.")
