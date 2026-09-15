@@ -933,8 +933,42 @@ Codebase Audit & Stabilization Pass:
   - `python scratch/stress_test_audit.py`: PASSED (0 issues identified)
   - `python scratch/verify_live_anki_media_sync.py`: PASSED (successfully synced card with image and audio to live AnkiConnect note 1789381014702 and cleaned up)
 
+### Phase 8.4: Bugfix — Anki Media Field HTML Formatting & Paused Video Audio Recording (2026-09-14)
+
+- **Files Changed**:
+  - `backend/app/services/anki_connect.py`:
+    - Fixed image rendering in Anki notes: `map_card_to_fields` now formats image values as HTML `<img>` tags (`<img src="{filename}">`). Bare filenames previously caused Anki card templates to either render raw text or nothing.
+    - Fixed audio playback in Anki notes: `map_card_to_fields` now formats audio values as standard Anki sound tags (`[sound:{filename}]`).
+    - Fixed Basic model (Front/Back): appends formatted image (`<img src="...">`) and audio (`[sound:...]`) tags to `Back` if the model lacks dedicated media fields, ensuring media is never discarded.
+    - Expanded note model field aliases: added `sentencepicture`, `vocabpicture`, `snapshot`, `illustration`, `images`, `pictures`, `sentencesound`, `vocabsound`, `audios`, `sounds` supporting community templates such as Japanese Mining.
+    - Added graceful fallback: if media fields are not matched, media is safely appended to `notes` or `back` without polluting `meaning`.
+  - `backend/app/services/card_service.py`:
+    - Updated `sync_card_to_anki`: extracts clean media filenames (stripping HTML/sound wrapper syntax if present) and ensures stored or base64 data URL images/audio are reliably saved to disk and uploaded to Anki's media collection via `store_media_file`.
+  - `extension/sidepanel/sidepanel.js`:
+    - Fixed audio auto-capture on word identification: `identify()` now inspects `toggleAutoCaptureAudio.checked` and triggers `retakeAudio()` when enabled and video mining is active. Previously, only `retakeScreenshot()` was triggered and audio was omitted.
+    - Added `currentActiveCue` tracking from `SUBTITLE_CUE_CHANGED` messages and forwarded it to `TRIGGER_AUDIO_RECORDING`.
+    - Added `allowPausedPlayback: true` in `retakeAudio()` options to enable seamless sentence slice audio recording for paused videos.
+  - `extension/content/video-mining-poc.js`:
+    - Implemented paused video sentence audio capture: when `this.activeVideo.paused` and `allowPausedPlayback` is true (the standard state when mining from paused/auto-paused subtitles), AnkiMiner captures the sentence slice by seeking to the cue's `startTime`, initiating `START_AUDIO_RECORDING` via `tabCapture`, briefly playing the slice to feed audio into the tab capture stream, and restoring the video's original paused state and seek position once recording completes.
+  - `backend/tests/test_anki_connect.py`:
+    - Updated assertions to verify `<img src="...">` and `[sound:...]` tag formatting.
+    - Added `test_mapping_japanese_mining_model_variations` and `test_mapping_basic_model_with_media_included_in_back`.
+  - `backend/tests/test_media_storage.py`:
+    - Updated `test_anki_field_mapping_with_media_and_aliases` to assert formatted image and sound tags.
+  - `extension/tests/audio-recording.test.js`:
+    - Added Case 8 verifying `recordSentenceAudio` slice capture on paused videos with `allowPausedPlayback: true` and seek/pause state restoration.
+
+- **Behavior Delivered**:
+  1. Cards sent to Anki now display the captured video frame image and play recorded audio across all note models, including `japanese mining` and standard `Basic`.
+  2. Automatic sentence audio capture triggers reliably alongside video frames when mining on both YouTube and HiAnime.
+  3. Video playback smoothly restores to its exact paused position after sentence audio recording completes without audio disruption.
+
+- **Verification Run**:
+  - `python -m pytest -o pythonpath=backend backend/tests`: PASSED (106/106 passed, 0 regressions)
+  - `node --test extension/tests/*.test.js`: PASSED (16/16 test suites passed, 0 regressions)
+
 - **Remaining Risk**:
-  - None identified. All audit to-do items are completely resolved and verified against live services.
+  - Users on Chromium/Brave must keep the tab unmuted so `chrome.tabCapture` can capture tab audio samples during slice recording.
 
 
 

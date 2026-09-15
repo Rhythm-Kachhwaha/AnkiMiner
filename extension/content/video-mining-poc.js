@@ -1630,10 +1630,9 @@
       const durationSeconds = Math.max(0.1, (endTime - startTime) / playbackRate);
       const durationMs = Math.round(durationSeconds * 1000);
 
-      // Playback invariant: Video must NEVER be seeked, paused, or played by audio capture.
-      // Live audio capture requires the video to be actively playing.
-      // If paused, fail gracefully without disrupting playback or throwing errors.
-      if (this.activeVideo.paused && !options.allowPausedRecording) {
+      // Playback invariant: When actively playing, live audio capture records directly.
+      // If paused, unless allowPausedPlayback is requested (active mining flow), fail gracefully.
+      if (this.activeVideo.paused && !options.allowPausedRecording && !options.allowPausedPlayback) {
         return {
           ok: false,
           error: "AUDIO_CAPTURE_UNAVAILABLE",
@@ -1656,19 +1655,54 @@
         };
       }
 
+      const wasPaused = Boolean(this.activeVideo.paused);
+      const originalTime = this.activeVideo.currentTime;
+
+      if (wasPaused && options.allowPausedPlayback) {
+        try {
+          this.activeVideo.currentTime = startTime;
+          await new Promise(resolve => {
+            const onSeeked = () => {
+              this.activeVideo.removeEventListener?.("seeked", onSeeked);
+              resolve();
+            };
+            this.activeVideo.addEventListener?.("seeked", onSeeked);
+            setTimeout(resolve, 80);
+          });
+        } catch (_) {}
+      }
+
+      const recPromise = sendMsg({
+        type: "START_AUDIO_RECORDING",
+        durationMs: durationMs,
+        mimeType: options.mimeType || "audio/webm;codecs=opus"
+      });
+
+      if (wasPaused && options.allowPausedPlayback) {
+        try {
+          const playPromise = this.activeVideo.play?.();
+          if (playPromise && typeof playPromise.catch === "function") {
+            playPromise.catch(() => {});
+          }
+        } catch (_) {}
+      }
+
       let recResult;
       try {
-        recResult = await sendMsg({
-          type: "START_AUDIO_RECORDING",
-          durationMs: durationMs,
-          mimeType: options.mimeType || "audio/webm;codecs=opus"
-        });
+        recResult = await recPromise;
       } catch (err) {
         recResult = {
           ok: false,
           error: "RECORDING_REQUEST_FAILED",
           message: err?.message || "Audio recording communication failed"
         };
+      } finally {
+        if (wasPaused && options.allowPausedPlayback) {
+          try {
+            this.activeVideo.pause?.();
+            this.activeVideo.currentTime = originalTime;
+          } catch (_) {}
+        }
       }
 
       if (recResult?.ok) {
@@ -1711,7 +1745,8 @@
         return true;
       }
       if (message?.type === "TRIGGER_AUDIO_RECORDING") {
-        this.recordSentenceAudio(message.cue, message.options).then(res => {
+        const audioOpts = Object.assign({ allowPausedPlayback: true }, message.options);
+        this.recordSentenceAudio(message.cue, audioOpts).then(res => {
           sendResponse?.(res);
         }).catch(err => {
           sendResponse?.({ ok: false, error: err?.message || "AUDIO_RECORDING_FAILED" });

@@ -100,6 +100,7 @@ let currentSubtitleOffset = 0.0;
 let loadedSubtitlesFilename = "";
 let availableCaptionTracks = [];
 let lastCaptureSource = { tabId: null, frameId: null };
+let currentActiveCue = null;
 
 let selectedHistoryCardId = null;
 let searchDebounceTimeout = null;
@@ -837,13 +838,16 @@ async function identify(text) {
       if (fieldTags) fieldTags.value = body.tags || "";
       if (fieldNotes) fieldNotes.value = body.notes || "";
 
-      // Automatically trigger frame screenshot if enabled and media is not already saved.
-      // NOTE: Subtitle/word identification/hover must NEVER automatically trigger audio capture,
-      // as audio capture must only occur during active mining flows without disrupting video playback.
+      // Automatically trigger frame screenshot and sentence audio if enabled and media is not already saved.
       const shouldAutoCaptureFrame = toggleAutoCaptureFrame ? toggleAutoCaptureFrame.checked : true;
+      const shouldAutoCaptureAudio = toggleAutoCaptureAudio ? toggleAutoCaptureAudio.checked : true;
 
       if (!body.image && shouldAutoCaptureFrame && isVideoMiningActive()) {
         retakeScreenshot();
+      }
+
+      if (!body.audio && shouldAutoCaptureAudio && isVideoMiningActive()) {
+        retakeAudio();
       }
 
       // Sync state update
@@ -986,8 +990,10 @@ function retakeAudio() {
   setStatus("Recording sentence audio…");
   broadcastToActiveVideo({
     type: "TRIGGER_AUDIO_RECORDING",
+    cue: typeof currentActiveCue !== "undefined" ? currentActiveCue : null,
     options: {
-      mimeType: "audio/webm;codecs=opus"
+      mimeType: "audio/webm;codecs=opus",
+      allowPausedPlayback: true
     }
   });
 }
@@ -2015,6 +2021,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
   if (message?.type === "SUBTITLE_CUE_CHANGED") {
+    if (message.cue) {
+      currentActiveCue = message.cue;
+    }
     if (videoCurrentCuePreview) {
       videoCurrentCuePreview.textContent = message.cue?.text || "—";
     }

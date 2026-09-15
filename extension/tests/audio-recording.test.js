@@ -528,6 +528,25 @@ async function testVideoMiningPOCAudioRecording() {
   // Duration: (1066.82 - 1059.47) * 1000 = 7350 ms
   assert.equal(ytStartMsg.durationMs, 7350, "durationMs must accurately calculate for startTime/endTime cue");
 
+  // Case 8: Paused video sentence playback recording when allowPausedPlayback is true
+  mockVideo.paused = true;
+  seekTarget = 15.0;
+  played = false;
+  paused = false;
+  sentMessages.length = 0;
+
+  const pausedPlaybackResult = await pocInstance.recordSentenceAudio(cue, {
+    audioPaddingStart: 0.15,
+    audioPaddingEnd: 0.20,
+    allowPausedPlayback: true
+  });
+
+  assert.ok(pausedPlaybackResult.ok, "recordSentenceAudio should succeed for paused video when allowPausedPlayback is true");
+  assert.equal(mockVideo.paused, true, "Video must be restored to paused after slice playback");
+  assert.equal(seekTarget, 15.0, "Video currentTime must be restored to original paused position");
+  const pausedStartMsg = sentMessages.find(m => m.type === "START_AUDIO_RECORDING");
+  assert.ok(pausedStartMsg, "START_AUDIO_RECORDING sent during paused playback capture");
+
   console.log("PASS: VideoMiningPOC.recordSentenceAudio and TRIGGER_AUDIO_RECORDING verified.");
 }
 

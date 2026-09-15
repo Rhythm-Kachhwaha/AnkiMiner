@@ -2,7 +2,12 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+import logging
+import os
+import re
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from app.repositories.card_repository import CardDraft, CardRecord, CardRepository
 from app.schemas import (
@@ -331,20 +336,43 @@ class CardService:
 
             # 2. Upload media files to Anki collection if present
             storage = MediaStorageService()
+            clean_image_file = ""
             if card.image:
-                img_bytes = storage.get_media_bytes(card.image)
+                clean_img = os.path.basename(re.sub(r'<img\s+[^>]*src=["\']([^"\']+)["\']', r'\1', card.image, flags=re.IGNORECASE).strip())
+                img_bytes = storage.get_media_bytes(clean_img)
+                if not img_bytes and card.image.startswith("data:image/"):
+                    try:
+                        clean_img = storage.save_media(card.image, media_type="image")
+                        img_bytes = storage.get_media_bytes(clean_img)
+                    except Exception as err:
+                        logger.warning("Failed to save raw data URL image: %s", err)
                 if img_bytes:
+                    clean_image_file = clean_img
                     try:
-                        self.anki.store_media_file(filename=card.image, data_bytes=img_bytes)
-                    except Exception:
-                        pass
+                        self.anki.store_media_file(filename=clean_img, data_bytes=img_bytes)
+                    except Exception as err:
+                        logger.warning("Failed to store image in Anki: %s", err)
+                elif clean_img:
+                    clean_image_file = clean_img
+
+            clean_audio_file = ""
             if card.audio:
-                aud_bytes = storage.get_media_bytes(card.audio)
-                if aud_bytes:
+                clean_aud = os.path.basename(re.sub(r'\[sound:([^\]]+)\]', r'\1', card.audio, flags=re.IGNORECASE).strip())
+                aud_bytes = storage.get_media_bytes(clean_aud)
+                if not aud_bytes and card.audio.startswith("data:audio/"):
                     try:
-                        self.anki.store_media_file(filename=card.audio, data_bytes=aud_bytes)
-                    except Exception:
-                        pass
+                        clean_aud = storage.save_media(card.audio, media_type="audio")
+                        aud_bytes = storage.get_media_bytes(clean_aud)
+                    except Exception as err:
+                        logger.warning("Failed to save raw data URL audio: %s", err)
+                if aud_bytes:
+                    clean_audio_file = clean_aud
+                    try:
+                        self.anki.store_media_file(filename=clean_aud, data_bytes=aud_bytes)
+                    except Exception as err:
+                        logger.warning("Failed to store audio in Anki: %s", err)
+                elif clean_aud:
+                    clean_audio_file = clean_aud
 
             # 3. Add note to Anki
             card_data = {
@@ -354,8 +382,8 @@ class CardService:
                 "hint": card.hint,
                 "example_sentence": card.example_sentence,
                 "example_translation": card.example_translation,
-                "image": card.image,
-                "audio": card.audio,
+                "image": clean_image_file or card.image,
+                "audio": clean_audio_file or card.audio,
                 "tags": card.tags,
                 "notes": card.notes,
             }

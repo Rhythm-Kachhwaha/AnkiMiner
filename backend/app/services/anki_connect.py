@@ -332,10 +332,16 @@ class AnkiConnectService:
 
         fields_clean = {f.lower().replace(" ", "").replace("_", "").replace("-", "") for f in fields}
 
-        image_keywords = {"image", "picture", "screenshot", "photo", "sentenceimage", "vocabimage"}
+        image_keywords = {
+            "image", "picture", "screenshot", "photo", "sentenceimage", "vocabimage",
+            "sentencepicture", "vocabpicture", "snapshot", "illustration", "images", "pictures"
+        }
         supports_image = bool(fields_clean.intersection(image_keywords))
 
-        audio_keywords = {"audio", "sound", "voice", "pronunciation", "sentenceaudio", "vocabaudio"}
+        audio_keywords = {
+            "audio", "sound", "voice", "pronunciation", "sentenceaudio", "vocabaudio",
+            "sentencesound", "vocabsound", "audios", "sounds"
+        }
         supports_audio = bool(fields_clean.intersection(audio_keywords))
 
         sentence_keywords = {"examplesentence", "sentenceexpression", "sentence", "sentences", "example", "examples"}
@@ -352,8 +358,8 @@ class AnkiConnectService:
     def map_card_to_fields(self, card: dict[str, Any], model_fields: list[str]) -> dict[str, str]:
         """
         Deterministically map card fields to the model's fields.
-        Supports standard Japanese fields, community templates (Yomitan, Core 2k/6k, Kaishi),
-        as well as Basic (Front/Back).
+        Supports standard Japanese fields, community templates (Yomitan, Core 2k/6k, Kaishi, Japanese Mining),
+        as well as Basic (Front/Back). Formats image fields as <img> tags and audio as [sound:...] tags.
         """
         field_map: dict[str, str] = {}
         fields_lower = {f.lower().replace(" ", "").replace("_", "").replace("-", ""): f for f in model_fields}
@@ -366,9 +372,25 @@ class AnkiConnectService:
         example_trans = card.get("example_translation", "")
         notes = card.get("notes", "")
 
-        # Media values
+        # Media values formatted for Anki
         raw_img = (card.get("image") or "").strip()
         raw_aud = (card.get("audio") or "").strip()
+
+        formatted_img = ""
+        if raw_img:
+            if raw_img.lower().startswith("<img"):
+                formatted_img = raw_img
+            else:
+                img_file = os.path.basename(raw_img)
+                formatted_img = f'<img src="{img_file}">'
+
+        formatted_aud = ""
+        if raw_aud:
+            if raw_aud.startswith("[sound:"):
+                formatted_aud = raw_aud
+            else:
+                aud_file = os.path.basename(raw_aud)
+                formatted_aud = f"[sound:{aud_file}]"
 
         # Check if model is standard Front/Back (Basic)
         if "front" in fields_lower and "back" in fields_lower:
@@ -392,6 +414,10 @@ class AnkiConnectService:
                     back_parts.append(example)
             if notes:
                 back_parts.append(f"Notes: {notes}")
+            if formatted_img and "image" not in fields_lower and "picture" not in fields_lower:
+                back_parts.append(formatted_img)
+            if formatted_aud and "audio" not in fields_lower and "sound" not in fields_lower:
+                back_parts.append(formatted_aud)
             field_map[back_field] = "<br><br>".join(back_parts)
 
             # Populate additional fields if present in model
@@ -399,23 +425,28 @@ class AnkiConnectService:
                 field_map[fields_lower["word"]] = expr
             if "reading" in fields_lower and reading:
                 field_map[fields_lower["reading"]] = reading
-            if "audio" in fields_lower and raw_aud:
-                field_map[fields_lower["audio"]] = raw_aud
-            if "image" in fields_lower and raw_img:
-                field_map[fields_lower["image"]] = raw_img
+            if "audio" in fields_lower and formatted_aud:
+                field_map[fields_lower["audio"]] = formatted_aud
+            elif "sound" in fields_lower and formatted_aud:
+                field_map[fields_lower["sound"]] = formatted_aud
+            if "image" in fields_lower and formatted_img:
+                field_map[fields_lower["image"]] = formatted_img
+            elif "picture" in fields_lower and formatted_img:
+                field_map[fields_lower["picture"]] = formatted_img
 
             return field_map
 
         # Specialized or multi-field model: match fields deterministically
-        def assign(keys: tuple[str, ...], value: str) -> None:
+        def assign(keys: tuple[str, ...], value: str) -> bool:
             if not value:
-                return
+                return False
             for k in keys:
                 if k in fields_lower:
                     real_name = fields_lower[k]
                     if real_name not in field_map:
                         field_map[real_name] = value
-                        return
+                        return True
+            return False
 
         assign(("expression", "japanese", "word", "front", "kanji", "vocabkanji", "vocab", "targetword", "vocabulary", "headword"), expr)
         assign(("reading", "furigana", "kana", "vocabfurigana", "vocabreading", "kanareading", "readingfurigana"), reading)
@@ -424,8 +455,37 @@ class AnkiConnectService:
         assign(("examplesentence", "sentenceexpression", "sentence", "sentences", "example", "examples"), example)
         assign(("exampletranslation", "sentencetranslation", "sentenceenglish", "examplesentencemeaning", "translation"), example_trans)
         assign(("notes", "note", "comment"), notes)
-        assign(("image", "picture", "sentenceimage", "vocabimage", "screenshot", "photo"), raw_img)
-        assign(("audio", "sound", "sentenceaudio", "vocabaudio", "voice", "pronunciation"), raw_aud)
+
+        image_keys = (
+            "image", "picture", "sentenceimage", "sentencepicture",
+            "vocabimage", "vocabpicture", "screenshot", "photo",
+            "snapshot", "illustration", "images", "pictures"
+        )
+        img_assigned = assign(image_keys, formatted_img)
+
+        audio_keys = (
+            "audio", "sound", "sentenceaudio", "sentencesound",
+            "vocabaudio", "vocabsound", "voice", "pronunciation",
+            "audios", "sounds"
+        )
+        aud_assigned = assign(audio_keys, formatted_aud)
+
+        # If media was not assigned to a dedicated field, append to back or notes so it is not discarded
+        if formatted_img and not img_assigned:
+            for fallback_key in ("notes", "note", "back"):
+                if fallback_key in fields_lower:
+                    real = fields_lower[fallback_key]
+                    current = field_map.get(real, "")
+                    field_map[real] = f"{current}<br><br>{formatted_img}" if current else formatted_img
+                    break
+
+        if formatted_aud and not aud_assigned:
+            for fallback_key in ("notes", "note", "back"):
+                if fallback_key in fields_lower:
+                    real = fields_lower[fallback_key]
+                    current = field_map.get(real, "")
+                    field_map[real] = f"{current} {formatted_aud}" if current else formatted_aud
+                    break
 
         # Ensure at least the first model field is populated
         if model_fields and model_fields[0] not in field_map:

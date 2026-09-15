@@ -201,7 +201,7 @@ class TestAnkiConnectService:
         assert fields["Reading"] == "やくそく"
         assert fields["Glossary"] == "promise; agreement"
         assert fields["Sentence"] == "約束を守る"
-        assert fields["Audio"] == "audio.mp3"
+        assert fields["Audio"] == "[sound:audio.mp3]"
 
     def test_mapping_core_2k_template(self):
         service = AnkiConnectService()
@@ -253,8 +253,40 @@ class TestAnkiConnectService:
         assert fields["VocabFurigana"] == "たべる"
         assert fields["VocabDef"] == "to eat"
         assert fields["Sentence"] == "ご飯を食べる"
-        assert fields["SentenceAudio"] == "taberu.mp3"
-        assert fields["SentenceImage"] == "taberu.jpg"
+        assert fields["SentenceAudio"] == "[sound:taberu.mp3]"
+        assert fields["SentenceImage"] == '<img src="taberu.jpg">'
+
+    def test_mapping_japanese_mining_model_variations(self):
+        service = AnkiConnectService()
+        card_data = {
+            "expression": "遅刻",
+            "reading": "ちこく",
+            "meaning": "lateness, tardiness",
+            "image": "ankiminer_img_123.jpg",
+            "audio": "ankiminer_audio_456.webm",
+        }
+        fields = service.map_card_to_fields(
+            card_data,
+            ["Expression", "Reading", "Meaning", "SentencePicture", "SentenceSound"]
+        )
+        assert fields["Expression"] == "遅刻"
+        assert fields["Reading"] == "ちこく"
+        assert fields["Meaning"] == "lateness, tardiness"
+        assert fields["SentencePicture"] == '<img src="ankiminer_img_123.jpg">'
+        assert fields["SentenceSound"] == '[sound:ankiminer_audio_456.webm]'
+
+    def test_mapping_basic_model_with_media_included_in_back(self):
+        service = AnkiConnectService()
+        card_data = {
+            "expression": "遅刻",
+            "meaning": "lateness",
+            "image": "ankiminer_img_123.jpg",
+            "audio": "ankiminer_audio_456.webm",
+        }
+        fields = service.map_card_to_fields(card_data, ["Front", "Back"])
+        assert fields["Front"] == "遅刻"
+        assert '<img src="ankiminer_img_123.jpg">' in fields["Back"]
+        assert '[sound:ankiminer_audio_456.webm]' in fields["Back"]
 
     def test_mapping_arbitrary_two_field_fallback(self):
         service = AnkiConnectService()

@@ -144,8 +144,8 @@ class MediaStorageTests(unittest.TestCase):
         self.assertEqual(mapped_custom["TargetWord"], "約束")
         self.assertEqual(mapped_custom["Reading"], "やくそく")
         self.assertEqual(mapped_custom["VocabMeaning"], "promise")
-        self.assertEqual(mapped_custom["SentenceAudio"], "ankiminer_audio_456.wav")
-        self.assertEqual(mapped_custom["VocabImage"], "ankiminer_img_123.jpg")
+        self.assertEqual(mapped_custom["SentenceAudio"], "[sound:ankiminer_audio_456.wav]")
+        self.assertEqual(mapped_custom["VocabImage"], '<img src="ankiminer_img_123.jpg">')
 
 
 if __name__ == "__main__":
