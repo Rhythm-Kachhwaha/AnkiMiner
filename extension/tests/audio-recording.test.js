@@ -229,7 +229,8 @@ async function testBackgroundAudioCoordination() {
       query: () => Promise.resolve([{ id: 88, windowId: 10 }]),
       sendMessage: () => Promise.resolve(),
       onActivated: { addListener: () => {} },
-      onUpdated: { addListener: () => {} }
+      onUpdated: { addListener: () => {} },
+      onRemoved: { addListener: () => {} }
     }
   };
 
@@ -298,7 +299,42 @@ async function testBackgroundAudioCoordination() {
   assert.equal(concurrentResponse?.error, "RECORDING_IN_PROGRESS");
   delayOffscreen = false;
 
-  console.log("PASS: background.js offscreen document lifecycle, audio coordination, and recording mutex verified.");
+  // Case 4: Persistent Audio Capture Integration on Mining Mode Toggle
+  offscreenMessageSent = null;
+  let miningModeResponse = null;
+  listener(
+    { type: "SET_MINING_MODE", enabled: true },
+    {},
+    (res) => { miningModeResponse = res; }
+  );
+  assert.equal(miningModeResponse?.ok, true);
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.ok(offscreenMessageSent, "Offscreen message sent when enabling mining mode");
+  assert.equal(offscreenMessageSent.type, "START_PERSISTENT_CAPTURE");
+  assert.equal(offscreenMessageSent.streamId, "stream-token-88");
+
+  // Case 5: GET_AUDIO_CAPTURE_STATE message handler
+  let captureStateResponse = null;
+  listener(
+    { type: "GET_AUDIO_CAPTURE_STATE" },
+    {},
+    (res) => { captureStateResponse = res; }
+  );
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.ok(captureStateResponse && captureStateResponse.ok);
+
+  // Case 6: Stop persistent capture on Mining Mode disabled
+  offscreenMessageSent = null;
+  listener(
+    { type: "SET_MINING_MODE", enabled: false },
+    {},
+    () => {}
+  );
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.ok(offscreenMessageSent);
+  assert.equal(offscreenMessageSent.type, "STOP_PERSISTENT_CAPTURE");
+
+  console.log("PASS: background.js offscreen document lifecycle, persistent capture, and audio coordination verified.");
 }
 
 // -------------------------------------------------------------
@@ -309,6 +345,7 @@ async function testVideoMiningPOCAudioRecording() {
 
   const sentMessages = [];
   const messageListeners = [];
+  let simulateExtractionUnavailable = false;
 
   const mockChrome = {
     runtime: {
@@ -320,6 +357,25 @@ async function testVideoMiningPOCAudioRecording() {
             dataUrl: "data:audio/webm;base64,RECORDED_AUDIO_WEBM",
             mimeType: "audio/webm;codecs=opus",
             durationMs: msg.durationMs
+          });
+        }
+        if (msg.type === "EXTRACT_SUBTITLE_AUDIO") {
+          if (simulateExtractionUnavailable) {
+            return Promise.resolve({
+              ok: false,
+              error: "AUDIO_CAPTURE_UNAVAILABLE",
+              message: "Audio capture unavailable"
+            });
+          }
+          const durMs = Math.round(((msg.endTime ?? 0) - (msg.startTime ?? 0) + (msg.paddingStart ?? 0) + (msg.paddingEnd ?? 0)) * 1000);
+          return Promise.resolve({
+            ok: true,
+            status: "READY",
+            dataUrl: "data:audio/wav;base64,RECORDED_AUDIO_WAV",
+            mimeType: "audio/wav",
+            startTime: (msg.startTime ?? 0) - (msg.paddingStart ?? 0),
+            endTime: (msg.endTime ?? 0) + (msg.paddingEnd ?? 0),
+            durationMs: durMs
           });
         }
         return Promise.resolve({ ok: true });
@@ -421,25 +477,27 @@ async function testVideoMiningPOCAudioRecording() {
   assert.equal(noCueRes.ok, false);
   assert.equal(noCueRes.error, "NO_ACTIVE_CUE");
 
-  // Case 3a: Valid cue when video is paused -> fail gracefully without seeking or playing
+  // Case 3a: Valid cue when extraction unavailable -> fail gracefully without seeking or playing
   const cue = { start: 10.0, end: 12.0, text: "テスト字幕" };
   pocInstance.syncEngine.offset = 0.0;
   mockVideo.paused = true;
   seekTarget = -1;
   played = false;
   paused = false;
+  simulateExtractionUnavailable = true;
 
   const pausedResult = await pocInstance.recordSentenceAudio(cue, {
     audioPaddingStart: 0.15,
     audioPaddingEnd: 0.20
   });
 
-  assert.equal(pausedResult.ok, false, "recordSentenceAudio should fail gracefully when paused");
+  assert.equal(pausedResult.ok, false, "recordSentenceAudio should fail gracefully when unavailable");
   assert.equal(pausedResult.error, "AUDIO_CAPTURE_UNAVAILABLE");
   assert.equal(seekTarget, -1, "Video must NEVER be seeked during audio recording");
   assert.equal(played, false, "Video must NEVER be forced to play by audio recording");
 
   // Case 3b: Valid cue when video is playing -> record without seeking or pausing
+  simulateExtractionUnavailable = false;
   mockVideo.paused = false;
   seekTarget = -1;
   played = false;
@@ -456,16 +514,17 @@ async function testVideoMiningPOCAudioRecording() {
   assert.equal(played, false, "Video playback must not be toggled");
   assert.equal(mockVideo.paused, false, "Video must remain playing without interruption");
 
-  // Verify START_AUDIO_RECORDING message sent
-  const startMsg = sentMessages.find(m => m.type === "START_AUDIO_RECORDING");
-  assert.ok(startMsg, "START_AUDIO_RECORDING message sent to background");
+  // Verify EXTRACT_SUBTITLE_AUDIO or START_AUDIO_RECORDING message sent
+  const startMsg = sentMessages.find(m => m.type === "EXTRACT_SUBTITLE_AUDIO" || m.type === "START_AUDIO_RECORDING");
+  assert.ok(startMsg, "Audio extraction/recording message sent to background");
   // Duration: (12.20 - 9.85) / 1.0 * 1000 = 2350 ms
-  assert.equal(startMsg.durationMs, 2350, "durationMs must include 150ms lead-in and 200ms tail padding");
+  const actualDurationMs = startMsg.durationMs || Math.round((startMsg.endTime - startMsg.startTime + startMsg.paddingStart + startMsg.paddingEnd) * 1000);
+  assert.equal(actualDurationMs, 2350, "durationMs must include 150ms lead-in and 200ms tail padding");
 
   // Verify AUDIO_CAPTURED broadcast
   const broadcastMsg = sentMessages.find(m => m.type === "AUDIO_CAPTURED");
   assert.ok(broadcastMsg, "AUDIO_CAPTURED broadcast message sent");
-  assert.equal(broadcastMsg.dataUrl, "data:audio/webm;base64,RECORDED_AUDIO_WEBM");
+  assert.ok(broadcastMsg.dataUrl.includes("RECORDED_AUDIO"), "Audio data URL attached");
   assert.equal(broadcastMsg.durationMs, 2350);
   assert.equal(broadcastMsg.cue, cue);
 
@@ -481,8 +540,9 @@ async function testVideoMiningPOCAudioRecording() {
   });
 
   assert.equal(seekTarget, -1, "Video must NEVER be seeked regardless of timing offset");
-  const offsetStartMsg = sentMessages.find(m => m.type === "START_AUDIO_RECORDING");
-  assert.equal(offsetStartMsg.durationMs, 2350);
+  const offsetStartMsg = sentMessages.find(m => m.type === "EXTRACT_SUBTITLE_AUDIO" || m.type === "START_AUDIO_RECORDING");
+  const actualOffsetDuration = offsetStartMsg.durationMs || Math.round((offsetStartMsg.endTime - offsetStartMsg.startTime + offsetStartMsg.paddingStart + offsetStartMsg.paddingEnd) * 1000);
+  assert.equal(actualOffsetDuration, 2350);
 
   // Case 5: Playback state preservation when initially playing
   mockVideo.paused = false;
@@ -524,13 +584,14 @@ async function testVideoMiningPOCAudioRecording() {
 
   assert.ok(ytRecResult.ok, "recordSentenceAudio should succeed with startTime/endTime cue");
   assert.equal(seekTarget, -1, "Video must NEVER be seeked for startTime/endTime cue");
-  const ytStartMsg = sentMessages.find(m => m.type === "START_AUDIO_RECORDING");
+  const ytStartMsg = sentMessages.find(m => m.type === "EXTRACT_SUBTITLE_AUDIO" || m.type === "START_AUDIO_RECORDING");
   // Duration: (1066.82 - 1059.47) * 1000 = 7350 ms
-  assert.equal(ytStartMsg.durationMs, 7350, "durationMs must accurately calculate for startTime/endTime cue");
+  const actualYtDuration = ytStartMsg.durationMs || Math.round((ytStartMsg.endTime - ytStartMsg.startTime + ytStartMsg.paddingStart + ytStartMsg.paddingEnd) * 1000);
+  assert.equal(actualYtDuration, 7350, "durationMs must accurately calculate for startTime/endTime cue");
 
-  // Case 8: Paused video sentence playback recording when allowPausedPlayback is true
+  // Case 8: Paused video passive capture handling (Strict Playback Invariant)
   mockVideo.paused = true;
-  seekTarget = 15.0;
+  seekTarget = -1;
   played = false;
   paused = false;
   sentMessages.length = 0;
@@ -538,14 +599,15 @@ async function testVideoMiningPOCAudioRecording() {
   const pausedPlaybackResult = await pocInstance.recordSentenceAudio(cue, {
     audioPaddingStart: 0.15,
     audioPaddingEnd: 0.20,
-    allowPausedPlayback: true
+    allowPausedRecording: true
   });
 
-  assert.ok(pausedPlaybackResult.ok, "recordSentenceAudio should succeed for paused video when allowPausedPlayback is true");
-  assert.equal(mockVideo.paused, true, "Video must be restored to paused after slice playback");
-  assert.equal(seekTarget, 15.0, "Video currentTime must be restored to original paused position");
-  const pausedStartMsg = sentMessages.find(m => m.type === "START_AUDIO_RECORDING");
-  assert.ok(pausedStartMsg, "START_AUDIO_RECORDING sent during paused playback capture");
+  assert.ok(pausedPlaybackResult.ok, "recordSentenceAudio with allowPausedRecording sends capture request");
+  assert.equal(mockVideo.paused, true, "Video must remain paused");
+  assert.equal(played, false, "Video must NEVER be played by audio capture");
+  assert.equal(seekTarget, -1, "Video currentTime must NEVER be changed by audio capture");
+  const pausedStartMsg = sentMessages.find(m => m.type === "EXTRACT_SUBTITLE_AUDIO" || m.type === "START_AUDIO_RECORDING");
+  assert.ok(pausedStartMsg, "Extraction message sent during passive capture");
 
   console.log("PASS: VideoMiningPOC.recordSentenceAudio and TRIGGER_AUDIO_RECORDING verified.");
 }

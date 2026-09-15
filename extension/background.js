@@ -70,6 +70,59 @@ async function ensureOffscreenDocument() {
 }
 
 let isRecordingAudio = false;
+let activeCaptureTabId = null;
+
+async function startPersistentCaptureForTab(tabId) {
+  if (!tabId || typeof chrome === "undefined" || !chrome.tabCapture?.getMediaStreamId) {
+    return { ok: false, error: "TAB_CAPTURE_UNAVAILABLE" };
+  }
+
+  try {
+    const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId });
+    if (!isMiningModeEnabled) {
+      return { ok: false, error: "MINING_MODE_DISABLED", message: "Mining mode was disabled during setup" };
+    }
+    if (!streamId) {
+      return { ok: false, error: "NO_STREAM_ID" };
+    }
+
+    await ensureOffscreenDocument();
+    if (!isMiningModeEnabled) {
+      return { ok: false, error: "MINING_MODE_DISABLED", message: "Mining mode was disabled during setup" };
+    }
+
+    const result = await chrome.runtime.sendMessage({
+      type: "START_PERSISTENT_CAPTURE",
+      streamId
+    });
+
+    if (result?.ok) {
+      if (!isMiningModeEnabled) {
+        await stopPersistentCapture();
+        return { ok: false, error: "MINING_MODE_DISABLED" };
+      }
+      activeCaptureTabId = tabId;
+    }
+
+    return result || { ok: true };
+  } catch (err) {
+    console.warn("[AnkiMiner Background] Persistent audio capture init warning:", err);
+    return {
+      ok: false,
+      error: err?.name === "AbortError" || err?.name === "NotAllowedError" ? "DRM_AUDIO_RESTRICTED" : "CAPTURE_START_FAILED",
+      message: err?.message
+    };
+  }
+}
+
+async function stopPersistentCapture() {
+  activeCaptureTabId = null;
+  try {
+    if (await hasOffscreenDocument()) {
+      await chrome.runtime.sendMessage({ type: "STOP_PERSISTENT_CAPTURE" });
+    }
+  } catch (_) {}
+}
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "SET_MINING_MODE") {
@@ -81,17 +134,59 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
       }
     }).catch(() => {});
+
     activeTab().then(async tab => {
       if (tab?.id) {
         await ensureContentScript(tab.id);
         await chrome.tabs.sendMessage(tab.id, {type: "MINING_MODE_CHANGED", enabled: isMiningModeEnabled}).catch(() => {});
+
+        if (isMiningModeEnabled) {
+          // Initialize persistent passive audio capture once on mining mode start
+          await startPersistentCaptureForTab(tab.id);
+        } else {
+          await stopPersistentCapture();
+        }
       }
     }).catch(() => {});
+
     sendResponse({ok: true, stage: "content-script"});
     return true;
   }
   if (message?.type === "GET_MINING_MODE") {
     sendResponse({ok: true, enabled: isMiningModeEnabled});
+    return true;
+  }
+  if (message?.type === "GET_AUDIO_CAPTURE_STATE") {
+    (async () => {
+      try {
+        if (await hasOffscreenDocument()) {
+          const stateRes = await chrome.runtime.sendMessage({ type: "GET_CAPTURE_STATE" });
+          sendResponse(stateRes || { ok: true, state: "idle" });
+        } else {
+          sendResponse({ ok: true, state: "idle" });
+        }
+      } catch (err) {
+        sendResponse({ ok: false, error: err?.message || "FAILED_TO_GET_STATE" });
+      }
+    })();
+    return true;
+  }
+  if (message?.type === "AUDIO_SYNC_HEARTBEAT" || message?.type === "EXTRACT_SUBTITLE_AUDIO" || message?.type === "CANCEL_PENDING_AUDIO_CAPTURE" || message?.type === "GET_AUDIO_SYNC_STATE") {
+    (async () => {
+      try {
+        if (await hasOffscreenDocument()) {
+          const offscreenMsg = message.type === "GET_AUDIO_SYNC_STATE"
+            ? { type: "GET_SYNC_STATE" }
+            : message;
+          const res = await chrome.runtime.sendMessage(offscreenMsg);
+          sendResponse(res || { ok: true });
+        } else {
+          sendResponse({ ok: false, error: "NO_OFFSCREEN_DOCUMENT" });
+        }
+      } catch (err) {
+        sendResponse({ ok: false, error: err?.message });
+      }
+    })();
     return true;
   }
   if (message?.type === "FETCH_YOUTUBE_TIMEDTEXT") {
@@ -215,7 +310,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
-chrome.tabs.onActivated.addListener(activeInfo => {
+chrome.tabs.onActivated?.addListener?.(activeInfo => {
   if (isMiningModeEnabled && activeInfo?.tabId) {
     ensureContentScript(activeInfo.tabId).then(() => {
       chrome.tabs.sendMessage(activeInfo.tabId, {type: "MINING_MODE_CHANGED", enabled: true}).catch(() => {});
@@ -223,7 +318,7 @@ chrome.tabs.onActivated.addListener(activeInfo => {
   }
 });
 
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+chrome.tabs.onUpdated?.addListener?.((tabId, changeInfo, tab) => {
   if (isMiningModeEnabled && changeInfo.status === "complete" && tab?.url && !tab.url.startsWith("chrome://")) {
     ensureContentScript(tabId).then(() => {
       chrome.tabs.sendMessage(tabId, {type: "MINING_MODE_CHANGED", enabled: true}).catch(() => {});
@@ -231,10 +326,18 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   }
 });
 
+chrome.tabs.onRemoved?.addListener?.((tabId) => {
+  if (activeCaptureTabId && tabId === activeCaptureTabId) {
+    stopPersistentCapture();
+  }
+});
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     hasOffscreenDocument,
     ensureOffscreenDocument,
+    startPersistentCaptureForTab,
+    stopPersistentCapture,
     OFFSCREEN_DOCUMENT_PATH
   };
 }

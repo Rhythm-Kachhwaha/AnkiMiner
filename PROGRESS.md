@@ -2,6 +2,73 @@
 
 ## Current status
 
+Automatic Audio Capture Architecture — Stage 5 (Audio Reliability & Production Hardening) (2026-09-15):
+- **Full Audio Lifecycle Hardening**:
+  - Resolved pending capture race conditions: propagated `captureId` across `identify()`, `retakeAudio()`, `retakeScreenshot()`, and `video-mining-poc.js`, ensuring stale audio from earlier selections never attaches to newer card drafts.
+  - Added pending capture cancellation (`CANCEL_PENDING_AUDIO_CAPTURE`) when audio preview is cleared or when a new Japanese term is identified.
+  - Resolved rapid Mining Mode toggling race conditions in `background.js` by checking `isMiningModeEnabled` during asynchronous stream and offscreen initialization.
+- **Pending Capture Queue Bounding & Proactive Eviction**:
+  - Enforced `maxPendingCaptures = 20` in `AudioTimelineSyncEngine` (`extension/offscreen/audio-timeline-sync.js`) to prevent memory leaks during indefinite pauses.
+  - Added proactive eviction of expired pending captures during `onPcmChunkWritten`: any pending item whose start sample has been evicted from the rolling buffer (`targetStartSample < ringBuffer.getOldestSampleIndex()`) is immediately pruned with `AUDIO_BUFFER_EXPIRED`.
+- **Playback Rate Transition Re-Anchoring**:
+  - Fixed sync drift spike on playback rate changes (0.5x, 1.0x, 1.25x, 1.5x, 2.0x): `ingestHeartbeat` now immediately re-anchors at the rate transition point rather than calculating an artificial drift spike on past samples.
+- **Resource Teardown & Leak Prevention**:
+  - Enhanced `PersistentAudioCaptureEngine.cleanup()`: nullifies `pcmWorkletNode.port.onmessage` and `track.onended` handlers, immediately closes `AudioContext`, disconnects audio nodes, and clears ring buffer storage.
+  - Updated `track.onended` to immediately trigger `this.cleanup()` when Chromium terminates tab capture streams on navigation.
+- **AudioWorklet & WAV Encoder Finite Sample Clamping**:
+  - Added non-finite sample checks (`NaN`, `Infinity`) in `pcm-worklet-processor.js` and `wav-encoder.js`, clamping to `0.0` to eliminate audio pops and encoder corruption.
+  - Hardened `WavEncoder.arrayBufferToDataUrl` with safe chunked byte iteration to eliminate call-stack limits.
+- **Comprehensive Verification**:
+  - Created `extension/tests/audio-reliability-stage5.test.js` (5+ min streaming stress test, boundary extractions, multi-rate scaling, queue bounding, track ending cleanup, NaN/Infinity clamping).
+  - Created `backend/tests/test_stage5_audio_reliability.py` (WAV Data URL storage, path traversal protection, re-save idempotency, AnkiConnect model mapping).
+  - All 23 extension node test suites pass with 100% success.
+  - All 121 backend pytest tests pass with 100% success (0 regressions).
+
+Automatic Audio Capture Architecture — Stage 4 (Card Draft, Preview, Local Persistence & Anki Integration) (2026-09-15):
+- **Card Draft Audio Integration**: Wired Stage 3 `AUDIO_CAPTURED` and `AUDIO_CAPTURE_STATUS` messages to `currentDraftMedia` in `extension/sidepanel/sidepanel.js` supporting structured states: `available`, `pending`, `unavailable`, `expired`, and `discontinuity`.
+- **Side Panel Audio Preview**:
+  - Implemented compact audio preview container (`#audio-preview-container`) in Card Editor with play, pause, replay (`#btn-replay-audio`), and clear (`#btn-clear-audio`) controls.
+  - Added status badge (`#audio-status-badge`) rendering dynamic color-coded pills (`.badge-ready`, `.badge-pending`, `.badge-unavailable`, `.badge-expired`, `.badge-discontinuity`).
+  - Audio preview is fully isolated from video playback: zero video seeking, zero forced playback toggles.
+- **Local Persistence & Idempotency**:
+  - Updated `CardService.save_card()` in `backend/app/services/card_service.py` to persist WAV Data URLs as deterministic `.wav` files via `MediaStorageService` while preserving existing saved filenames on card updates/re-saves without duplicate file creation or orphaned media.
+  - Mining History restoration: Opening a saved card restores the audio preview and URL, enabling re-listening and preserving media on re-save.
+  - Text mining fail-safe: Card saving and Anki syncing continue smoothly if audio capture is unavailable or restricted.
+- **AnkiConnect Field Mapping**:
+  - Expanded `AnkiConnectService` model capabilities in `backend/app/services/anki_connect.py` with comprehensive audio keyword detection (`Audio`, `SentenceAudio`, `Sound`, `Word Audio`, `VocabAudio`, `KanaAudio`, etc.).
+  - Deterministic mapping attaches `[sound:filename.wav]` to designated audio fields or `Back` (for Basic). If a custom note model lacks an audio field, `supports_audio` is `False`, note creation proceeds with text fields, and audio is never dumped into arbitrary text fields.
+  - Re-sync / retry safety: Media upload via `storeMediaFile` and duplicate note detection prevent broken or duplicated media attachments.
+- **Verification**:
+  - Created `extension/tests/card-draft-audio.test.js` (DOM contracts, draft states, message handling, preview).
+  - Created `backend/tests/test_stage4_audio_card.py` (WAV persistence, re-save idempotency, Anki field mapping, failure recovery).
+  - All 22/22 extension node test suites pass. All 118/118 backend pytest tests pass with 0 regressions. Full report documented in `stage4.md`.
+
+Automatic Audio Capture Architecture — Stage 3 (Audio Timeline Synchronization & Subtitle Extraction) (2026-09-15):
+- **Deterministic 16-Bit Mono WAV Encoder**: Implemented `extension/offscreen/wav-encoder.js` producing standard 44-byte RIFF/WAVE headers, Float32-to-Int16 sample clamping/scaling, and base64 Data URL generation.
+- **Ring Buffer Range Extraction**: Added `extractRange(startSample, endSample)` to `RollingPcmBuffer` in `extension/offscreen/rolling-pcm-buffer.js` with boundary wraparound reconstruction and 30-second expiration protection (`AUDIO_BUFFER_EXPIRED`).
+- **Audio Timeline Synchronization Engine**: Implemented `AudioTimelineSyncEngine` in `extension/offscreen/audio-timeline-sync.js` featuring:
+  - Linear video-time to PCM sample mapping: $n(V) = n_{\text{anchor}} + (V - V_{\text{anchor}}) \times \frac{f_s}{r}$.
+  - Real-time heartbeat drift compensation ($|\Delta t| > 80\text{ ms}$).
+  - Timeline discontinuity tracking via `timelineId` on seeks, video element replacements, and stream reloads.
+  - Audio padding (150 ms pre-padding / 200 ms post-padding) with boundary clamping to timeline inception.
+  - Pause and live playhead pending capture queue that automatically finalizes WAV extraction when natural playback delivers the remaining samples.
+- **Passive Subtitle Extraction**: Wired `recordSentenceAudio` in `extension/content/video-mining-poc.js` to dispatch passive extraction requests via the background worker to the offscreen sync engine, maintaining 100% adherence to the Hard Playback Invariant.
+- **Verification**: Created 3 new test suites (`wav-encoder.test.js`, `audio-timeline-sync.test.js`, `subtitle-audio-extraction.test.js`). All 21 extension node test suites pass and all 110 backend pytest tests pass with 0 regressions. Full report in `Audio/Stage3.md`.
+
+Automatic Audio Capture Architecture — Stage 2 (Persistent Passive Audio Capture & Rolling PCM Buffer) (2026-09-15):
+- **Persistent Audio Engine**: Implemented `PersistentAudioCaptureEngine` in `extension/offscreen/offscreen.js` with structured capture states (`IDLE`, `STARTING`, `CAPTURING`, `PAUSED`, `ERROR`, `STOPPED`), maintaining the `tabCapture` stream and `AudioContext` across the entire mining session instead of per-sentence instantiations.
+- **AudioWorklet Processing**: Created `extension/offscreen/pcm-worklet-processor.js` to run on the Web Audio thread, downmixing stereo channels to mono `(L + R) / 2` and transferring 2048-sample Float32 blocks (~42.6 ms @ 48 kHz) via zero-copy `MessagePort.postMessage` (avoiding `SharedArrayBuffer` / COOP/COEP constraints).
+- **30-Second Circular PCM Ring Buffer**: Implemented `RollingPcmBuffer` in `extension/offscreen/rolling-pcm-buffer.js` with pre-allocated Float32 storage (~5.76 MB @ 48 kHz / ~5.29 MB @ 44.1 kHz), continuous wraparound overwrite, monotonic sample count tracking, and 0 bytes/sec garbage collection churn.
+- **Speaker Mirroring**: Connected `audioSource` to `audioContext.destination` with unity gain, ensuring normal speaker playback is completely preserved without echo or latency issues.
+- **Hard Playback Invariant Enforced**: Stripped out all legacy seek-and-replay routines in `extension/content/video-mining-poc.js`. Capture is 100% passive and never manipulates `currentTime`, `play()`, `pause()`, or playback rate.
+- **Mining Mode Lifecycle**: Wired persistent capture start (`START_PERSISTENT_CAPTURE`) to `SET_MINING_MODE` with single user-gesture stream acquisition in `extension/background.js`, with automatic teardown on mining toggle off or tab removal.
+- **Verification**: Added `rolling-pcm-buffer.test.js` and `audio-worklet-pipeline.test.js`. All 18/18 extension node test suites pass and all 110/110 backend pytest tests pass without regressions. Full report documented in `Audio/Stage2.md`.
+
+Automatic Audio Capture Architecture — Stage 1 (Inspection & Architecture Verification) (2026-09-15):
+- Completed comprehensive inspection of existing audio capture pipeline across `extension/offscreen/`, `extension/background.js`, `extension/content/`, `extension/sidepanel/`, and test suites against `AudioFeatureReport.md`.
+- Evaluated MV3 constraints, user activation lifetime, `tabCapture` stream mirroring, PCM ring buffer sizing (30s Float32 Mono @ 48kHz, ~5.76 MB), `AudioWorklet` transport via 2048-sample blocks, anchor-based synchronization, and DRM fail-soft behavior.
+- Verified all existing backend (110/110 pytest) and extension (16/16 node test suites) tests pass without regressions.
+
 Audio Recording & Anki Audio Field Sync Fix (2026-09-15):
 - **Backend regex fix**: Fixed `_extract_base64_and_ext` in `backend/app/services/media_storage.py` — regex changed from `r"^data:([^;]+);base64,(.*)$"` to `r"^data:(.*?);base64,(.*)$"` to handle MIME types with parameters like `audio/webm;codecs=opus`. Extension extraction now splits on `;` to get the base MIME for file extension mapping.
 - **Backend error logging**: Replaced silent `except Exception: pass` in `backend/app/services/card_service.py` `save_card` with `logger.warning()` calls for both image and audio media save failures, making future issues diagnosable in server logs.

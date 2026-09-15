@@ -69,3 +69,7 @@ local/
 *.db-shm
 *.db-wal
 backend/data/
+
+AudioReport.md
+AudioFeatureReport.md
+Audio/

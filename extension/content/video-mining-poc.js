@@ -1311,6 +1311,16 @@
       this.activeFilename = "";
       this.ytAdapter = null;
       this.netflixAdapter = null;
+      this.timelineId = 1;
+      this._heartbeatIntervalId = null;
+
+      this._boundOnPlay = () => this.sendSyncHeartbeat();
+      this._boundOnPause = () => this.sendSyncHeartbeat();
+      this._boundOnRateChange = () => this.sendSyncHeartbeat();
+      this._boundOnSeeking = () => this.onTimelineDiscontinuity("seeking");
+      this._boundOnSeeked = () => this.sendSyncHeartbeat();
+      this._boundOnLoadStart = () => this.onTimelineDiscontinuity("loadstart");
+      this._boundOnEmptied = () => this.onTimelineDiscontinuity("emptied");
 
       this.hotkeyController = new SubtitleHotkeyController({
         getVideo: () => this.activeVideo,
@@ -1419,6 +1429,54 @@
       } catch (_) {}
     }
 
+    onTimelineDiscontinuity(reason = "unknown") {
+      this.timelineId++;
+      this.sendSyncHeartbeat();
+    }
+
+    startHeartbeatTicker() {
+      this.stopHeartbeatTicker();
+      const setInt = typeof setInterval === "function"
+        ? setInterval
+        : (typeof window !== "undefined" && typeof window.setInterval === "function" ? window.setInterval : null);
+      if (setInt) {
+        this._heartbeatIntervalId = setInt(() => {
+          if (this.activeVideo && this.activeVideo.isConnected && !this.activeVideo.paused) {
+            this.sendSyncHeartbeat();
+          }
+        }, 200);
+      }
+    }
+
+    stopHeartbeatTicker() {
+      if (this._heartbeatIntervalId !== null) {
+        const clearInt = typeof clearInterval === "function"
+          ? clearInterval
+          : (typeof window !== "undefined" && typeof window.clearInterval === "function" ? window.clearInterval : null);
+        if (clearInt) {
+          clearInt(this._heartbeatIntervalId);
+        }
+        this._heartbeatIntervalId = null;
+      }
+    }
+
+    sendSyncHeartbeat() {
+      if (!this.activeVideo || !this.activeVideo.isConnected) return;
+      const payload = {
+        type: "AUDIO_SYNC_HEARTBEAT",
+        timelineId: this.timelineId,
+        videoTime: this.activeVideo.currentTime,
+        wallClock: typeof performance !== "undefined" && performance.now ? performance.now() : Date.now(),
+        playbackRate: this.activeVideo.playbackRate || 1.0,
+        paused: this.activeVideo.paused
+      };
+      try {
+        if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+          chrome.runtime.sendMessage(payload).catch(() => {});
+        }
+      } catch (_) {}
+    }
+
     async captureCurrentFrame(options = {}) {
       if (!this.activeVideo || !this.activeVideo.isConnected) {
         return {
@@ -1494,7 +1552,8 @@
                     dataUrl: res.dataUrl,
                     timestamp: this.activeVideo.currentTime,
                     width: res.width,
-                    height: res.height
+                    height: res.height,
+                    captureId: options.captureId || null
                   }).catch(() => {});
                 }
                 return res;
@@ -1535,7 +1594,8 @@
               type: "SCREENSHOT_CAPTURE_STATUS",
               ok: false,
               error: failRes.error,
-              message: failRes.message
+              message: failRes.message,
+              captureId: options.captureId || null
             }).catch(() => {});
           }
         } catch (_) {}
@@ -1564,7 +1624,8 @@
               dataUrl: cropResult.dataUrl,
               timestamp: this.activeVideo.currentTime,
               width: cropResult.width,
-              height: cropResult.height
+              height: cropResult.height,
+              captureId: options.captureId || null
             }).catch(() => {});
           }
         } catch (_) {}
@@ -1575,7 +1636,8 @@
               type: "SCREENSHOT_CAPTURE_STATUS",
               ok: false,
               error: cropResult.error || "CAPTURE_FAILED",
-              message: cropResult.message || "Protected video frame cannot be captured"
+              message: cropResult.message || "Protected video frame cannot be captured",
+              captureId: options.captureId || null
             }).catch(() => {});
           }
         } catch (_) {}
@@ -1630,26 +1692,8 @@
       const offset = typeof options.offset === "number"
         ? options.offset
         : (this.syncEngine?.offset || 0.0);
-      const playbackRate = typeof options.playbackRate === "number"
-        ? options.playbackRate
-        : (this.activeVideo.playbackRate || 1.0);
 
-      const startTime = Math.max(0, (rawStart + offset) - paddingStart);
-      const endTime = (rawEnd + offset) + paddingEnd;
-      const durationSeconds = Math.max(0.1, (endTime - startTime) / playbackRate);
-      const durationMs = Math.round(durationSeconds * 1000);
-
-      // Playback invariant: When actively playing, live audio capture records directly.
-      // If paused, unless allowPausedPlayback is requested (active mining flow), fail gracefully.
-      if (this.activeVideo.paused && !options.allowPausedRecording && !options.allowPausedPlayback) {
-        return {
-          ok: false,
-          error: "AUDIO_CAPTURE_UNAVAILABLE",
-          message: "Audio capture is unavailable while video is paused"
-        };
-      }
-
-      // Send recording request to background service worker
+      // Send passive extraction request to background / offscreen sync engine
       const sendMsg = options.sendMessage || (
         typeof chrome !== "undefined" && chrome.runtime?.sendMessage
           ? chrome.runtime.sendMessage.bind(chrome.runtime)
@@ -1664,90 +1708,97 @@
         };
       }
 
-      const wasPaused = Boolean(this.activeVideo.paused);
-      const originalTime = this.activeVideo.currentTime;
-
-      if (wasPaused && options.allowPausedPlayback) {
-        try {
-          this.activeVideo.currentTime = startTime;
-          await new Promise(resolve => {
-            const onSeeked = () => {
-              this.activeVideo.removeEventListener?.("seeked", onSeeked);
-              resolve();
-            };
-            this.activeVideo.addEventListener?.("seeked", onSeeked);
-            setTimeout(resolve, 80);
-          });
-        } catch (_) {}
-      }
-
-      const recPromise = sendMsg({
-        type: "START_AUDIO_RECORDING",
-        durationMs: durationMs,
-        mimeType: options.mimeType || "audio/webm;codecs=opus"
-      });
-
-      if (wasPaused && options.allowPausedPlayback) {
-        try {
-          const playPromise = this.activeVideo.play?.();
-          if (playPromise && typeof playPromise.catch === "function") {
-            playPromise.catch(() => {});
-          }
-        } catch (_) {}
-      }
+      const extractReq = {
+        type: "EXTRACT_SUBTITLE_AUDIO",
+        startTime: rawStart,
+        endTime: rawEnd,
+        timelineId: this.timelineId,
+        offset,
+        paddingStart,
+        paddingEnd,
+        cue: targetCue,
+        captureId: options.captureId || null
+      };
 
       let recResult;
       try {
-        recResult = await recPromise;
+        recResult = await sendMsg(extractReq);
       } catch (err) {
         recResult = {
           ok: false,
-          error: "RECORDING_REQUEST_FAILED",
-          message: err?.message || "Audio recording communication failed"
+          error: "EXTRACTION_REQUEST_FAILED",
+          message: err?.message || "Audio extraction communication failed"
         };
-      } finally {
-        if (wasPaused && options.allowPausedPlayback) {
-          try {
-            this.activeVideo.pause?.();
-            this.activeVideo.currentTime = originalTime;
-          } catch (_) {}
-        }
       }
 
-      // Tier 2 Fallback: If background tabCapture failed, try direct video element captureStream
-      if (!recResult?.ok && !options._skipCaptureStreamFallback) {
-        const fallbackResult = await this._captureStreamFallback(durationMs, options);
-        if (fallbackResult?.ok) {
-          recResult = fallbackResult;
-        }
-      }
-
-      if (recResult?.ok) {
+      // If passive buffer extraction succeeded immediately
+      if (recResult?.ok && recResult.status === "READY") {
         try {
           if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
             chrome.runtime.sendMessage({
               type: "AUDIO_CAPTURED",
               dataUrl: recResult.dataUrl,
-              mimeType: recResult.mimeType || "audio/webm",
-              startTime,
-              endTime,
-              durationMs,
-              cue: targetCue
+              mimeType: recResult.mimeType || "audio/wav",
+              startTime: recResult.startTime,
+              endTime: recResult.endTime,
+              durationMs: recResult.durationMs,
+              cue: targetCue,
+              captureId: options.captureId || null
             }).catch(() => {});
           }
         } catch (_) {}
-      } else {
+        return recResult;
+      }
+
+      // If passive extraction is pending natural playback completion
+      if (recResult?.ok && recResult.status === "PENDING") {
         try {
           if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
             chrome.runtime.sendMessage({
               type: "AUDIO_CAPTURE_STATUS",
-              ok: false,
-              error: recResult?.error || "AUDIO_UNAVAILABLE",
-              message: recResult?.message || "Audio unavailable for this source"
+              ok: true,
+              status: "PENDING",
+              pending: true,
+              message: "Audio capture queued (capturing on playback resume)",
+              captureId: options.captureId || null
             }).catch(() => {});
           }
         } catch (_) {}
+        return recResult;
       }
+
+      // Fallback: If offscreen sync is not active (legacy/offline mode) and fallback is allowed
+      if (!recResult?.ok && options.allowFallbackRecording && !options._skipCaptureStreamFallback) {
+        const fallbackResult = await this._captureStreamFallback(3000, options);
+        if (fallbackResult?.ok) {
+          recResult = fallbackResult;
+          try {
+            if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+              chrome.runtime.sendMessage({
+                type: "AUDIO_CAPTURED",
+                dataUrl: recResult.dataUrl,
+                mimeType: recResult.mimeType || "audio/webm",
+                cue: targetCue,
+                captureId: options.captureId || null
+              }).catch(() => {});
+            }
+          } catch (_) {}
+          return recResult;
+        }
+      }
+
+      // Non-blocking error broadcast
+      try {
+        if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+          chrome.runtime.sendMessage({
+            type: "AUDIO_CAPTURE_STATUS",
+            ok: false,
+            error: recResult?.error || "AUDIO_UNAVAILABLE",
+            message: recResult?.message || "Audio unavailable for this source",
+            captureId: options.captureId || null
+          }).catch(() => {});
+        }
+      } catch (_) {}
 
       return recResult;
     }
@@ -2079,12 +2130,41 @@
     }
 
     onVideoDetected(video) {
+      if (this.activeVideo && this.activeVideo !== video) {
+        if (typeof this.activeVideo.removeEventListener === "function") {
+          this.activeVideo.removeEventListener("play", this._boundOnPlay);
+          this.activeVideo.removeEventListener("pause", this._boundOnPause);
+          this.activeVideo.removeEventListener("ratechange", this._boundOnRateChange);
+          this.activeVideo.removeEventListener("seeking", this._boundOnSeeking);
+          this.activeVideo.removeEventListener("seeked", this._boundOnSeeked);
+          this.activeVideo.removeEventListener("loadstart", this._boundOnLoadStart);
+          this.activeVideo.removeEventListener("emptied", this._boundOnEmptied);
+        }
+        this.stopHeartbeatTicker();
+      }
+
+      const isNewVideo = Boolean(video && video !== this.activeVideo);
       this.activeVideo = video;
       this.autoPauseController.attachVideo(video);
       if (this.netflixAdapter && typeof this.netflixAdapter.setVideo === "function") {
         this.netflixAdapter.setVideo(video);
       }
       if (video) {
+        if (isNewVideo) {
+          this.onTimelineDiscontinuity("video_element_changed");
+        }
+        if (typeof video.addEventListener === "function") {
+          video.addEventListener("play", this._boundOnPlay);
+          video.addEventListener("pause", this._boundOnPause);
+          video.addEventListener("ratechange", this._boundOnRateChange);
+          video.addEventListener("seeking", this._boundOnSeeking);
+          video.addEventListener("seeked", this._boundOnSeeked);
+          video.addEventListener("loadstart", this._boundOnLoadStart);
+          video.addEventListener("emptied", this._boundOnEmptied);
+        }
+        this.startHeartbeatTicker();
+        this.sendSyncHeartbeat();
+
         console.log("[AnkiMiner Video POC] Primary video detected:", video);
         try {
           const trackReport = inspectNativeTextTracks(video);
@@ -2095,6 +2175,7 @@
         this.syncEngine.attach(video);
       } else {
         console.log("[AnkiMiner Video POC] No active video present.");
+        this.stopHeartbeatTicker();
         this.autoPauseController.detachOverlay();
         this.autoPauseController.detachVideo();
         this.syncEngine.detach();
@@ -2103,6 +2184,17 @@
     }
 
     destroy() {
+      if (this.activeVideo && typeof this.activeVideo.removeEventListener === "function") {
+        this.activeVideo.removeEventListener("play", this._boundOnPlay);
+        this.activeVideo.removeEventListener("pause", this._boundOnPause);
+        this.activeVideo.removeEventListener("ratechange", this._boundOnRateChange);
+        this.activeVideo.removeEventListener("seeking", this._boundOnSeeking);
+        this.activeVideo.removeEventListener("seeked", this._boundOnSeeked);
+        this.activeVideo.removeEventListener("loadstart", this._boundOnLoadStart);
+        this.activeVideo.removeEventListener("emptied", this._boundOnEmptied);
+      }
+      this.stopHeartbeatTicker();
+
       if (this.hotkeyController) {
         this.hotkeyController.detach();
       }

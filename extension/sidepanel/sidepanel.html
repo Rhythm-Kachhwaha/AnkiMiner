@@ -164,15 +164,19 @@
           <!-- Audio Preview Card -->
           <div id="audio-preview-container" class="media-preview-card">
             <div class="media-preview-header">
-              <span class="media-type-badge">AUDIO</span>
+              <div class="media-header-left">
+                <span class="media-type-badge">AUDIO</span>
+                <span id="audio-status-badge" class="media-status-pill" hidden>Ready</span>
+              </div>
               <div class="media-preview-actions">
+                <button type="button" id="btn-replay-audio" class="btn-media-action btn-media-replay" title="Replay audio" aria-label="Replay audio" hidden>↺ Replay</button>
                 <button type="button" id="btn-clear-audio" class="btn-media-action btn-media-clear" title="Remove audio" aria-label="Remove audio" hidden>&times;</button>
               </div>
             </div>
             <div class="media-audio-wrapper">
               <div id="audio-empty-placeholder" class="media-empty-placeholder">
                 <span class="media-placeholder-icon">🎙️</span>
-                <span class="media-placeholder-text">No audio clip</span>
+                <span id="audio-placeholder-text" class="media-placeholder-text">No audio clip</span>
               </div>
               <audio id="audio-preview" class="media-audio-player" controls preload="metadata" src="" hidden></audio>
             </div>

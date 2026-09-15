@@ -71,6 +71,7 @@ const jsContent = fs.readFileSync(jsPath, "utf8");
 
 // Mock DOM elements
 function createMockElement(tag, id = "") {
+  const classes = new Set();
   return {
     tagName: tag.toUpperCase(),
     id,
@@ -82,6 +83,15 @@ function createMockElement(tag, id = "") {
     title: "",
     paused: false,
     _attributes: {},
+    classList: {
+      add: (...cls) => { cls.forEach(c => classes.add(c)); },
+      remove: (...cls) => { cls.forEach(c => classes.delete(c)); },
+      contains: (cls) => classes.has(cls),
+      toggle: (cls) => {
+        if (classes.has(cls)) { classes.delete(cls); return false; }
+        classes.add(cls); return true;
+      }
+    },
     setAttribute(k, v) { this._attributes[k] = v; },
     getAttribute(k) { return this._attributes[k]; },
     removeAttribute(k) {
@@ -106,6 +116,9 @@ const mockAudioPreview = createMockElement("audio", "audio-preview");
 const mockAudioEmptyPlaceholder = createMockElement("div", "audio-empty-placeholder");
 const mockBtnRetakeAudio = createMockElement("button", "btn-retake-audio");
 const mockBtnClearAudio = createMockElement("button", "btn-clear-audio");
+const mockBtnReplayAudio = createMockElement("button", "btn-replay-audio");
+const mockAudioStatusBadge = createMockElement("span", "audio-status-badge");
+const mockAudioPlaceholderText = createMockElement("span", "audio-placeholder-text");
 
 const mockBtnQuickCaptureFrame = createMockElement("button", "btn-quick-capture-frame");
 const mockBtnQuickRecordAudio = createMockElement("button", "btn-quick-record-audio");
@@ -129,6 +142,9 @@ const mockContext = {
   audioEmptyPlaceholder: mockAudioEmptyPlaceholder,
   btnRetakeAudio: mockBtnRetakeAudio,
   btnClearAudio: mockBtnClearAudio,
+  btnReplayAudio: mockBtnReplayAudio,
+  audioStatusBadge: mockAudioStatusBadge,
+  audioPlaceholderText: mockAudioPlaceholderText,
   btnQuickCaptureFrame: mockBtnQuickCaptureFrame,
   btnQuickRecordAudio: mockBtnQuickRecordAudio,
   fieldImage: mockFieldImage,
@@ -141,7 +157,8 @@ const mockContext = {
     imageBase64: null,
     audioBase64: null,
     mimeType: null,
-    captureId: null
+    captureId: null,
+    audioStatus: "idle"
   },
   setStatus: (msg) => { statusLogs.push(msg); },
   broadcastToActiveVideo: async (msg) => {
@@ -263,7 +280,8 @@ const listenerContext = {
     imageBase64: null,
     audioBase64: null,
     mimeType: null,
-    captureId: null
+    captureId: null,
+    audioStatus: "idle"
   },
   cardEditor: mockCardEditor,
   fieldImage: mockFieldImage,
@@ -278,6 +296,9 @@ const listenerContext = {
   audioEmptyPlaceholder: mockAudioEmptyPlaceholder,
   btnRetakeAudio: mockBtnRetakeAudio,
   btnClearAudio: mockBtnClearAudio,
+  btnReplayAudio: mockBtnReplayAudio,
+  audioStatusBadge: mockAudioStatusBadge,
+  audioPlaceholderText: mockAudioPlaceholderText,
   mediaPreviewContainer: mockMediaPreviewContainer,
   updateMediaPreviews: () => {
     mockContext.currentDraftMedia = listenerContext.currentDraftMedia;

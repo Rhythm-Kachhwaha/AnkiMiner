@@ -340,12 +340,27 @@ class AnkiConnectService:
 
         audio_keywords = {
             "audio", "sound", "voice", "pronunciation", "sentenceaudio", "vocabaudio",
-            "sentencesound", "vocabsound", "audios", "sounds"
+            "sentencesound", "vocabsound", "audios", "sounds", "wordaudio", "targetaudio",
+            "targetwordaudio", "kanaaudio", "readingaudio", "sentenceaudiofile"
         }
         supports_audio = bool(fields_clean.intersection(audio_keywords))
 
         sentence_keywords = {"examplesentence", "sentenceexpression", "sentence", "sentences", "example", "examples"}
         supports_sentence = bool(fields_clean.intersection(sentence_keywords))
+
+        audio_field = None
+        for f in fields:
+            clean = f.lower().replace(" ", "").replace("_", "").replace("-", "")
+            if clean in audio_keywords:
+                audio_field = f
+                break
+
+        image_field = None
+        for f in fields:
+            clean = f.lower().replace(" ", "").replace("_", "").replace("-", "")
+            if clean in image_keywords:
+                image_field = f
+                break
 
         return {
             "model_name": chosen_model,
@@ -353,6 +368,8 @@ class AnkiConnectService:
             "supports_image": supports_image,
             "supports_audio": supports_audio,
             "supports_sentence": supports_sentence,
+            "audio_field": audio_field,
+            "image_field": image_field,
         }
 
     def map_card_to_fields(self, card: dict[str, Any], model_fields: list[str]) -> dict[str, str]:
@@ -441,8 +458,9 @@ class AnkiConnectService:
             if not value:
                 return False
             for k in keys:
-                if k in fields_lower:
-                    real_name = fields_lower[k]
+                clean_k = k.lower().replace(" ", "").replace("_", "").replace("-", "")
+                if clean_k in fields_lower:
+                    real_name = fields_lower[clean_k]
                     if real_name not in field_map:
                         field_map[real_name] = value
                         return True
@@ -464,27 +482,20 @@ class AnkiConnectService:
         img_assigned = assign(image_keys, formatted_img)
 
         audio_keys = (
-            "audio", "sound", "sentenceaudio", "sentencesound",
-            "vocabaudio", "vocabsound", "voice", "pronunciation",
-            "audios", "sounds"
+            "sentenceaudio", "sentencesound", "sentenceaudiofile", "sentence audio", "sentence sound",
+            "audio", "sound", "vocabaudio", "vocabsound", "vocab audio", "vocab sound",
+            "wordaudio", "word audio", "targetaudio", "targetwordaudio", "kanaaudio", "readingaudio",
+            "voice", "pronunciation", "audios", "sounds"
         )
         aud_assigned = assign(audio_keys, formatted_aud)
 
-        # If media was not assigned to a dedicated field, append to back or notes so it is not discarded
+        # If image was not assigned to a dedicated field, append to notes/back fallback
         if formatted_img and not img_assigned:
             for fallback_key in ("notes", "note", "back"):
                 if fallback_key in fields_lower:
                     real = fields_lower[fallback_key]
                     current = field_map.get(real, "")
                     field_map[real] = f"{current}<br><br>{formatted_img}" if current else formatted_img
-                    break
-
-        if formatted_aud and not aud_assigned:
-            for fallback_key in ("notes", "note", "back"):
-                if fallback_key in fields_lower:
-                    real = fields_lower[fallback_key]
-                    current = field_map.get(real, "")
-                    field_map[real] = f"{current} {formatted_aud}" if current else formatted_aud
                     break
 
         # Ensure at least the first model field is populated

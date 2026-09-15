@@ -61,6 +61,9 @@ const btnClearImage = document.querySelector("#btn-clear-image");
 const audioPreviewContainer = document.querySelector("#audio-preview-container");
 const audioPreview = document.querySelector("#audio-preview");
 const audioEmptyPlaceholder = document.querySelector("#audio-empty-placeholder");
+const audioPlaceholderText = document.querySelector("#audio-placeholder-text");
+const audioStatusBadge = document.querySelector("#audio-status-badge");
+const btnReplayAudio = document.querySelector("#btn-replay-audio");
 const btnClearAudio = document.querySelector("#btn-clear-audio");
 
 // History & Card Library elements
@@ -112,6 +115,8 @@ let ankiConnected = false;
 let currentDraftMedia = {
   imageBase64: null,
   audioBase64: null,
+  audioStatus: "idle", // "available" | "pending" | "unavailable" | "expired" | "discontinuity" | "idle"
+  audioError: null,
   mimeType: null,
   captureId: null
 };
@@ -833,6 +838,8 @@ async function identify(text) {
           ? body.audio
           : `http://127.0.0.1:8000/api/media/${body.audio}`;
         currentDraftMedia.audioBase64 = audioSrc;
+        currentDraftMedia.audioStatus = "available";
+        currentDraftMedia.audioError = null;
       }
       updateMediaPreviews();
       if (fieldTags) fieldTags.value = body.tags || "";
@@ -843,11 +850,14 @@ async function identify(text) {
       const shouldAutoCaptureAudio = toggleAutoCaptureAudio ? toggleAutoCaptureAudio.checked : true;
 
       if (!body.image && shouldAutoCaptureFrame && isVideoMiningActive()) {
-        retakeScreenshot();
+        retakeScreenshot(requestId);
       }
 
       if (!body.audio && shouldAutoCaptureAudio && isVideoMiningActive()) {
-        retakeAudio();
+        currentDraftMedia.audioStatus = "pending";
+        currentDraftMedia.captureId = requestId;
+        updateMediaPreviews();
+        retakeAudio(requestId);
       }
 
       // Sync state update
@@ -896,6 +906,7 @@ function isVideoMiningActive() {
 function updateMediaPreviews() {
   const hasImage = Boolean(currentDraftMedia.imageBase64);
   const hasAudio = Boolean(currentDraftMedia.audioBase64);
+  const audioStatus = currentDraftMedia.audioStatus || (hasAudio ? "available" : "idle");
 
   if (imagePreview) {
     if (hasImage) {
@@ -915,9 +926,12 @@ function updateMediaPreviews() {
     btnClearImage.hidden = !hasImage;
   }
 
+  // Audio preview & status handling
   if (audioPreview) {
     if (hasAudio) {
-      audioPreview.src = currentDraftMedia.audioBase64;
+      if (audioPreview.src !== currentDraftMedia.audioBase64) {
+        audioPreview.src = currentDraftMedia.audioBase64;
+      }
       audioPreview.hidden = false;
     } else {
       if (typeof audioPreview.pause === "function") {
@@ -936,6 +950,60 @@ function updateMediaPreviews() {
     btnClearAudio.hidden = !hasAudio;
   }
 
+  if (btnReplayAudio) {
+    btnReplayAudio.hidden = !hasAudio;
+  }
+
+  if (audioStatusBadge) {
+    audioStatusBadge.className = "media-status-pill";
+    switch (audioStatus) {
+      case "available":
+        audioStatusBadge.textContent = "Ready";
+        audioStatusBadge.classList.add("badge-ready");
+        audioStatusBadge.title = "Audio clip extracted and ready";
+        audioStatusBadge.hidden = false;
+        break;
+      case "pending":
+        audioStatusBadge.textContent = "Pending…";
+        audioStatusBadge.classList.add("badge-pending");
+        audioStatusBadge.title = "Waiting for natural playback to finish sentence";
+        audioStatusBadge.hidden = false;
+        if (audioPlaceholderText) audioPlaceholderText.textContent = "Waiting for playback…";
+        break;
+      case "expired":
+        audioStatusBadge.textContent = "Expired (>30s)";
+        audioStatusBadge.classList.add("badge-expired");
+        audioStatusBadge.title = "Audio fell outside the 30-second rolling buffer";
+        audioStatusBadge.hidden = false;
+        if (audioPlaceholderText) audioPlaceholderText.textContent = "Audio expired (>30s in past)";
+        break;
+      case "discontinuity":
+        audioStatusBadge.textContent = "Discontinuity";
+        audioStatusBadge.classList.add("badge-discontinuity");
+        audioStatusBadge.title = "Video was seeked or timeline changed";
+        audioStatusBadge.hidden = false;
+        if (audioPlaceholderText) audioPlaceholderText.textContent = "Audio segment changed (seeked)";
+        break;
+      case "unavailable":
+        const isDrm = String(currentDraftMedia.audioError || "").toUpperCase().includes("DRM");
+        audioStatusBadge.textContent = isDrm ? "DRM Restricted" : "Unavailable";
+        audioStatusBadge.classList.add("badge-unavailable");
+        audioStatusBadge.title = isDrm
+          ? "Audio capture restricted on this source (DRM protected)"
+          : (currentDraftMedia.audioError || "Audio capture unavailable");
+        audioStatusBadge.hidden = false;
+        if (audioPlaceholderText) {
+          audioPlaceholderText.textContent = isDrm
+            ? "Audio unavailable (DRM protected)"
+            : "Audio unavailable for this source";
+        }
+        break;
+      default:
+        audioStatusBadge.hidden = true;
+        if (audioPlaceholderText) audioPlaceholderText.textContent = "No audio clip";
+    }
+  }
+
   if (mediaPreviewContainer) {
     mediaPreviewContainer.hidden = false;
   }
@@ -949,7 +1017,19 @@ function clearImageMedia() {
 }
 
 function clearAudioMedia() {
+  if (currentDraftMedia.captureId) {
+    try {
+      if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+        chrome.runtime.sendMessage({
+          type: "CANCEL_PENDING_AUDIO_CAPTURE",
+          captureId: currentDraftMedia.captureId
+        }).catch(() => {});
+      }
+    } catch (_) {}
+  }
   currentDraftMedia.audioBase64 = null;
+  currentDraftMedia.audioStatus = "idle";
+  currentDraftMedia.audioError = null;
   currentDraftMedia.mimeType = null;
   if (fieldAudio) fieldAudio.value = "";
   updateMediaPreviews();
@@ -957,8 +1037,20 @@ function clearAudioMedia() {
 }
 
 function clearAllMedia() {
+  if (currentDraftMedia.captureId) {
+    try {
+      if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+        chrome.runtime.sendMessage({
+          type: "CANCEL_PENDING_AUDIO_CAPTURE",
+          captureId: currentDraftMedia.captureId
+        }).catch(() => {});
+      }
+    } catch (_) {}
+  }
   currentDraftMedia.imageBase64 = null;
   currentDraftMedia.audioBase64 = null;
+  currentDraftMedia.audioStatus = "idle";
+  currentDraftMedia.audioError = null;
   currentDraftMedia.mimeType = null;
   currentDraftMedia.captureId = null;
   updateMediaPreviews();
@@ -966,19 +1058,21 @@ function clearAllMedia() {
 
 function captureOrRetakeScreenshot() {
   if (cardEditor && cardEditor.hidden) cardEditor.hidden = false;
-  retakeScreenshot();
+  retakeScreenshot(currentCaptureId);
 }
 
 function recordOrRetakeAudio() {
   if (cardEditor && cardEditor.hidden) cardEditor.hidden = false;
-  retakeAudio();
+  retakeAudio(currentCaptureId);
 }
 
-function retakeScreenshot() {
+function retakeScreenshot(captureId = null) {
   setStatus("Capturing video frame screenshot…");
+  const capId = captureId || currentCaptureId;
   broadcastToActiveVideo({
     type: "TRIGGER_VIDEO_SCREENSHOT",
     options: {
+      captureId: capId,
       maxWidth: 640,
       maxHeight: 360,
       quality: 0.92
@@ -986,12 +1080,14 @@ function retakeScreenshot() {
   });
 }
 
-function retakeAudio() {
+function retakeAudio(captureId = null) {
   setStatus("Recording sentence audio…");
+  const capId = captureId || currentCaptureId;
   broadcastToActiveVideo({
     type: "TRIGGER_AUDIO_RECORDING",
     cue: typeof currentActiveCue !== "undefined" ? currentActiveCue : null,
     options: {
+      captureId: capId,
       mimeType: "audio/webm;codecs=opus",
       allowPausedPlayback: true
     }
@@ -1003,6 +1099,14 @@ if (btnClearImage) {
 }
 if (btnClearAudio) {
   btnClearAudio.addEventListener("click", clearAudioMedia);
+}
+if (btnReplayAudio) {
+  btnReplayAudio.addEventListener("click", () => {
+    if (audioPreview && audioPreview.src) {
+      audioPreview.currentTime = 0;
+      audioPreview.play().catch(() => {});
+    }
+  });
 }
 
 if (fieldImage) {
@@ -1023,9 +1127,12 @@ if (fieldAudio) {
     const val = fieldAudio.value.trim();
     if (val && (val.startsWith("http://") || val.startsWith("https://") || val.startsWith("data:audio/"))) {
       currentDraftMedia.audioBase64 = val;
+      currentDraftMedia.audioStatus = "available";
+      currentDraftMedia.audioError = null;
       updateMediaPreviews();
     } else if (!val && currentDraftMedia.audioBase64 && !currentDraftMedia.audioBase64.startsWith("data:audio/")) {
       currentDraftMedia.audioBase64 = null;
+      currentDraftMedia.audioStatus = "idle";
       updateMediaPreviews();
     }
   });
@@ -1093,6 +1200,23 @@ if (cardEditor) {
         fieldModelSelect.value = body.model_name;
         if (fieldModelName) fieldModelName.value = body.model_name;
       }
+      if (body.audio) {
+        if (fieldAudio) fieldAudio.value = body.audio;
+        const audioSrc = body.audio.startsWith("data:") || body.audio.startsWith("http:") || body.audio.startsWith("https:")
+          ? body.audio
+          : `http://127.0.0.1:8000/api/media/${body.audio}`;
+        currentDraftMedia.audioBase64 = audioSrc;
+        currentDraftMedia.audioStatus = "available";
+        currentDraftMedia.audioError = null;
+      }
+      if (body.image) {
+        if (fieldImage) fieldImage.value = body.image;
+        const imgSrc = body.image.startsWith("data:") || body.image.startsWith("http:") || body.image.startsWith("https:")
+          ? body.image
+          : `http://127.0.0.1:8000/api/media/${body.image}`;
+        currentDraftMedia.imageBase64 = imgSrc;
+      }
+      updateMediaPreviews();
       if (expression) expression.textContent = body.expression || expr;
       if (reading) reading.textContent = body.reading || "";
 
@@ -1457,6 +1581,11 @@ async function openSavedCard(cardId) {
           ? body.audio
           : `http://127.0.0.1:8000/api/media/${body.audio}`;
         currentDraftMedia.audioBase64 = audioSrc;
+        currentDraftMedia.audioStatus = "available";
+        currentDraftMedia.audioError = null;
+      } else {
+        currentDraftMedia.audioBase64 = null;
+        currentDraftMedia.audioStatus = "idle";
       }
       updateMediaPreviews();
       if (fieldTags) fieldTags.value = body.tags || "";
@@ -1975,24 +2104,54 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     if (message.dataUrl) {
       currentDraftMedia.audioBase64 = message.dataUrl;
-      currentDraftMedia.mimeType = message.mimeType || "audio/webm";
+      currentDraftMedia.audioStatus = "available";
+      currentDraftMedia.audioError = null;
+      currentDraftMedia.mimeType = message.mimeType || "audio/wav";
       currentDraftMedia.captureId = currentCaptureId;
       if (cardEditor && cardEditor.hidden) cardEditor.hidden = false;
       if (fieldAudio && !fieldAudio.value) {
-        fieldAudio.value = "captured_audio.webm";
+        fieldAudio.value = (message.mimeType && message.mimeType.includes("wav"))
+          ? "captured_audio.wav"
+          : "captured_audio.webm";
       }
       updateMediaPreviews();
-      setStatus("Audio snippet recorded.");
+      setStatus(message.wasPending ? "Audio snippet finalized on resume." : "Audio snippet extracted.");
     }
     sendResponse?.({ok: true});
     return true;
   }
   if (message?.type === "AUDIO_CAPTURE_STATUS") {
-    if (!message.ok) {
+    if (message.pending || message.status === "PENDING") {
+      currentDraftMedia.audioStatus = "pending";
+      currentDraftMedia.audioBase64 = null;
+      updateMediaPreviews();
+      setStatus("Audio queued (capturing on playback resume)...");
+    } else if (!message.ok) {
       const isDrm = message.error === "DRM_AUDIO_RESTRICTED" || message.error === "DRM_AUDIO";
+      const isExpired = message.error === "AUDIO_BUFFER_EXPIRED";
+      const isDiscontinuity = message.error === "AUDIO_DISCONTINUITY" || message.error === "TIMELINE_DISCONTINUITY";
+
+      if (isExpired) {
+        currentDraftMedia.audioStatus = "expired";
+      } else if (isDiscontinuity) {
+        currentDraftMedia.audioStatus = "discontinuity";
+      } else if (isDrm) {
+        currentDraftMedia.audioStatus = "unavailable";
+        currentDraftMedia.audioError = "DRM_AUDIO_RESTRICTED";
+      } else {
+        currentDraftMedia.audioStatus = "unavailable";
+        currentDraftMedia.audioError = message.error || "AUDIO_UNAVAILABLE";
+      }
+      currentDraftMedia.audioBase64 = null;
+      updateMediaPreviews();
+
       const statusText = isDrm
         ? "Audio unavailable for this source (DRM protected)."
-        : (message.message || "Audio unavailable for this source.");
+        : isExpired
+          ? "Audio expired from 30s rolling buffer."
+          : isDiscontinuity
+            ? "Audio segment changed due to seek."
+            : (message.message || "Audio unavailable for this source.");
       setStatus(statusText);
     }
     sendResponse?.({ ok: true });
