@@ -115,6 +115,13 @@ class AudioTimelineSyncEngine {
 
         // Cancel any pending captures for the previous timeline
         this._cancelPendingCapturesOnDiscontinuity(incomingTimelineId);
+
+        // On seek / timeline jump, new timeline starts at current buffer position
+        this.timelineStartSample = currentSample;
+      } else {
+        // Initial timeline anchor: account for prior video time in buffer
+        const pastSamples = Math.round((heartbeat.videoTime * this.sampleRate) / incomingRate);
+        this.timelineStartSample = Math.max(0, currentSample - pastSamples);
       }
 
       // Establish new anchor
@@ -124,7 +131,6 @@ class AudioTimelineSyncEngine {
       this.anchorWallClock = incomingWallClock;
       this.playbackRate = incomingRate;
       this.isPaused = incomingPaused;
-      this.timelineStartSample = currentSample;
 
       return {
         ok: true,
@@ -404,6 +410,7 @@ class AudioTimelineSyncEngine {
     // Map media times to absolute PCM sample indices
     const startMap = this.videoTimeToSample(paddedStartSec);
     const endMap = this.videoTimeToSample(paddedEndSec);
+    const unpaddedEndMap = this.videoTimeToSample(effectiveEnd);
 
     if (!startMap.ok || !endMap.ok) {
       return {
@@ -414,13 +421,15 @@ class AudioTimelineSyncEngine {
     }
 
     let targetStartSample = startMap.sample;
-    const targetEndSample = endMap.sample;
+    let targetEndSample = endMap.sample;
 
     // Boundary check: Clamp start sample to timeline start if padding crossed it
     if (targetStartSample < this.timelineStartSample) {
       const unpaddedStartMap = this.videoTimeToSample(effectiveStart);
       if (unpaddedStartMap.ok && unpaddedStartMap.sample >= this.timelineStartSample) {
         // Only the padding crossed the boundary: clamp start to timeline inception
+        targetStartSample = this.timelineStartSample;
+      } else if (this.timelineStartSample < targetEndSample) {
         targetStartSample = this.timelineStartSample;
       } else {
         // Subtitle itself begins before current timeline inception
@@ -429,6 +438,15 @@ class AudioTimelineSyncEngine {
           error: "AUDIO_DISCONTINUITY",
           message: "Requested subtitle audio precedes current playback timeline"
         };
+      }
+    }
+
+    // Paused video auto-clamp: if video is paused and post-padding extends beyond the newest sample,
+    // but core speech has already arrived, clamp end sample to newest available sample
+    const currentNewestSample = this.ringBuffer.getNewestSampleIndex();
+    if (this.isPaused && targetEndSample > currentNewestSample) {
+      if (unpaddedEndMap.ok && unpaddedEndMap.sample <= currentNewestSample && targetStartSample < currentNewestSample) {
+        targetEndSample = currentNewestSample;
       }
     }
 

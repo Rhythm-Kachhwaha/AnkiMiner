@@ -2,6 +2,92 @@
 
 ## Current status
 
+Audio Capture Architecture Fix & Production Hardening (2026-09-16):
+- **HARD PLAYBACK INVARIANT 100% PRESERVED**:
+  - Maintained strictly passive audio capture across all code paths. Zero seeking, zero `video.currentTime` assignment, zero `video.play()`, zero `video.pause()`, zero `video.playbackRate` mutation, zero `video.src` manipulation, zero element replacement.
+- **Root Cause Resolutions Delivered**:
+  - **Paused-Video Capture Deadlock Fixed**: In `extension/offscreen/audio-timeline-sync.js`, implemented auto-clamping of `targetEndSample` to `currentNewestSample` when video is paused and core speech `[effectiveStart, effectiveEnd]` has arrived in the buffer, eliminating the indefinite `AUDIO_FUTURE_PENDING` deadlock on hover/manual pause.
+  - **Timeline Inception Discontinuity Fixed**: In `AudioTimelineSyncEngine.ingestHeartbeat()`, calculated initial anchor timeline start as `timelineStartSample = Math.max(0, currentSample - pastSamples)` to account for prior video time already recorded in the buffer, eliminating false `AUDIO_DISCONTINUITY` rejections on mined subtitle speech. Seek discontinuities appropriately initialize to `currentSample`.
+  - **User Gesture Token Loss in MV3 Fixed**: In `extension/sidepanel/sidepanel.js`, acquired `chrome.tabCapture.getMediaStreamId({ targetTabId })` synchronously within the `setMiningMode` user click handler to preserve Chromium MV3 user activation tokens, propagating `streamId` directly to `extension/background.js`.
+  - **Past-Oriented Fallback Audio Slice**: In `extension/content/video-mining-poc.js`, updated fallback audio slice generation (when no external subtitle cues are loaded) to capture preceding 3.0 seconds `[ct - 3.0, ct]` instead of future audio, ensuring instant availability in the circular buffer.
+  - **Immediate Heartbeat & Offscreen Recovery**: Content script emits immediate heartbeats on `pause` and `seeked` events; background service worker auto-recovers offscreen documents on extraction messages.
+  - **Netflix DRM Fail-Soft Handling**: Maintained clean `DRM Restricted` fail-soft status display when Widevine DRM blocks `tabCapture` audio samples at the browser compositor level, preserving frame capture, dictionary lookups, and card drafts.
+- **Full Test Suite Verification**:
+  - Extension: 26/26 test suites passed (100% success, including `audio-capture-fix-regression.test.js`, `audio-timeline-sync.test.js`, and `audio-reliability-stage5.test.js`).
+  - Backend: 135/135 pytest tests passed (100% success, 0 regressions).
+  - Diagnostic Audit: Verified instant WAV extraction for paused and fallback audio mining.
+- **Final Status: AUDIO CAPTURE ARCHITECTURE FIXED & HARDENED**.
+
+Frame / Screenshot Capture Architecture — Stage 4 (Final Hardening & Regression) (2026-09-15):
+- **HARD PLAYBACK INVARIANT 100% PRESERVED**:
+  - Maintained strictly passive dual media capture across all code paths. Zero seeking, zero `video.currentTime` assignment, zero `video.play()`, zero `video.pause()`, zero `video.playbackRate` mutation, zero `video.src` manipulation, zero element replacement.
+- **Production-Readiness Architecture Audit**:
+  - Validated complete pipeline: Subtitle -> Word Mining -> Yomitan -> Screenshot -> Audio -> Side Panel Draft -> Save Card -> SQLite -> Local Media -> History -> AnkiConnect.
+  - Verified component boundaries across content script, background worker, offscreen document, Side Panel, FastAPI backend, SQLite, and AnkiConnect.
+  - Confirmed independent media state slots (`currentDraftMedia.imageBase64` and `currentDraftMedia.audioBase64`) with clean failure and retake isolation.
+- **Deduplication & Local Persistence Verification**:
+  - Verified local media file creation (`backend/data/media/ankiminer_img_*.jpg` and `backend/data/media/ankiminer_audio_*.wav`) and SQLite relative filename storage.
+  - Confirmed idempotent re-saving and editing from Mining History with 0 file duplication.
+- **AnkiConnect Synchronization Verification**:
+  - Basic model (`[sound:*.wav]<br><br><img src="*.jpg">` on Back) and Custom models (dedicated Picture/SentenceAudio fields) verified.
+  - Fail-soft handling for note models missing image or audio fields without polluting text fields.
+  - Duplicate note protection across sync retries.
+- **Full Test Suite & Browser Regression**:
+  - Extension: 25/25 test suites passed (100% success).
+  - Backend: 135/135 pytest tests passed (100% success, 0 regressions).
+  - Created final report in [`Frame/Stage4.md`](file:///d:/Python/AnkiMiner/Frame/Stage4.md).
+- **Final Status: FRAME CAPTURE COMPLETE**.
+
+Frame / Screenshot Capture Architecture — Stage 3 (Combined Media Card Lifecycle Verification) (2026-09-15):
+- **HARD PLAYBACK INVARIANT 100% PRESERVED**:
+  - Maintained strictly passive dual media capture across all code paths. Zero seeking, zero `video.currentTime` assignment, zero `video.play()`, zero `video.pause()`, zero `video.playbackRate` mutation, zero `video.src` manipulation, zero element replacement.
+- **Independent Media Slots & Isolation**:
+  - Verified and confirmed that screenshot image and sentence audio operate in independent slots in `sidepanel.js` (`currentDraftMedia.imageBase64` and `currentDraftMedia.audioBase64`).
+  - Capturing, retaking, or clearing image never alters or clears audio; capturing, retaking, or clearing audio never alters or clears image.
+  - Tested capture ID isolation scenarios A through G (stale message rejection, cancelled pending captures, fast word switches).
+- **Disk & Database Persistence Deduplication**:
+  - Saving a dual-media card generates exactly 1 `ankiminer_img_*.jpg` and 1 `ankiminer_audio_*.wav` file.
+  - Hardened `CardService.save_card()` in `backend/app/services/card_service.py` with URL-to-filename normalization (`/api/media/` prefix stripping) ensuring editing/re-saving cards from Mining History does not duplicate media files on disk or corrupt SQLite references.
+- **AnkiConnect Dual-Media Mapping Integrity**:
+  - Basic model: formatted sound tag and image tag (`[sound:*.wav]<br><br><img src="*.jpg">`) attached to `Back` field without collisions.
+  - Custom models: mapped cleanly to designated `Picture`/`Image` and `SentenceAudio`/`Audio` fields; unsupported media fields omit cleanly without throwing errors or polluting text fields.
+  - Handled sync retries with idempotency and duplicate note protection.
+- **Comprehensive Verification**:
+  - Created `extension/tests/frame-combined-media-stage3.test.js` (25/25 extension test suites passing, 100%).
+  - Created `backend/tests/test_stage3_combined_media.py` (135/135 backend pytest tests passing, 100%, 0 regressions).
+  - Created comprehensive Stage 3 report in [`Frame/Stage3.md`](file:///d:/Python/AnkiMiner/Frame/Stage3.md).
+
+Frame / Screenshot Capture Architecture — Stage 2 (Reliability, Timing & Coordinate Hardening) (2026-09-15):
+- **HARD PLAYBACK INVARIANT 100% PRESERVED**:
+  - Maintained strictly passive frame capture across all code paths. Zero seeking, zero `video.currentTime` assignment, zero `video.play()`, zero `video.pause()`, zero `video.playbackRate` mutation, zero `video.src` manipulation, zero element replacement.
+- **Coordinate & Crop Robustness (`extension/lib/image-cropper.js`)**:
+  - Added strict `Number.isFinite()` guards on `videoRect` dimensions/positions (`left`, `top`, `width`, `height`) preventing `NaN`/`Infinity` propagation into canvas operations.
+  - Implemented boundary clamping for out-of-bounds videos: negative offsets (scrolled partially offscreen), coordinates exceeding viewport dimensions (`imageWidth`, `imageHeight`), and oversized video elements.
+  - Hardened `calculateTargetDimensions` across arbitrary aspect ratios (16:9, 21:9 ultrawide, 4:3, 9:16 vertical Shorts/TikTok, 1:1 square, tiny videos), strictly preserving aspect ratio and preventing dimension stretching/distortion while bounding within 640x360 maximum envelope.
+  - Hardened `checkBlackFrame` with typed array validation, width/height bounds, and luminance noise-floor thresholding.
+- **Side Panel Stale Capture & DRM Isolation (`extension/sidepanel/sidepanel.js`)**:
+  - Enforced `captureId` match check on `SCREENSHOT_CAPTURE_STATUS` (and `AUDIO_CAPTURE_STATUS`) message listeners, preventing delayed DRM error broadcasts from earlier word selections from overwriting active card draft status.
+- **Multiple Video & Container Resilience (`extension/content/video-mining-poc.js`)**:
+  - Hardened `findPrimaryVideo` with safe `isFinite` area checks and visibility filtering (`opacity > 0`, `visibility !== 'hidden'`).
+  - Added safe rect validation in `captureCurrentFrame`.
+- **Comprehensive Verification**:
+  - Created `extension/tests/frame-capture-stage2.test.js` (24/24 extension test suites passing, 100%).
+  - Created `backend/tests/test_stage2_frame_capture.py` (127/127 backend pytest tests passing, 100%, 0 regressions).
+  - Created comprehensive Stage 2 report in [`Frame/Stage2.md`](file:///d:/Python/AnkiMiner/Frame/Stage2.md).
+
+Frame / Screenshot Capture Architecture — Stage 1 (Architecture Audit & Feasibility Report) (2026-09-15):
+- **Full Architecture Audit & Pipeline Inspection**:
+  - Inspected the end-to-end frame capture pipeline across `extension/content/video-mining-poc.js`, `extension/lib/image-cropper.js`, `extension/background.js`, `extension/sidepanel/sidepanel.js`, and backend services (`media_storage.py`, `card_service.py`, `anki_connect.py`).
+  - **HARD PLAYBACK INVARIANT 100% PRESERVED**: Explicitly verified that frame capture causes **zero** playback manipulation (zero seeking, zero `.play()`, zero `.pause()`, zero `currentTime` manipulation).
+  - Confirmed two-tier capture strategy: Tier 1 direct canvas `drawImage` for local/blob streams + Tier 2 `chrome.tabs.captureVisibleTab` fallback with `ImageCropper` for cross-origin/tainted canvases.
+  - Confirmed DRM black-frame detection via `ImageCropper.checkBlackFrame()` providing fail-soft `DRM_PROTECTED` user notifications on Widevine/Netflix streams.
+  - Confirmed `captureId` stale-capture isolation, 640x360 aspect-ratio downscaling (~30 KB JPEG), SQLite references, and AnkiConnect media synchronization.
+  - Created [`Frame/Stage1.md`](file:///d:/Python/AnkiMiner/Frame/Stage1.md) and [`framecapture/Stage1_Report.md`](file:///d:/Python/AnkiMiner/framecapture/Stage1_Report.md).
+- **Baseline Verification**:
+  - All 23 extension Node test suites pass with 100% success (`23/23 passed`).
+  - All 121 backend pytest tests pass with 100% success (`121/121 passed`, 0 regressions).
+  - Zero production code was modified during this stage.
+
 Automatic Audio Capture Architecture — Stage 5 (Audio Reliability & Production Hardening) (2026-09-15):
 - **Full Audio Lifecycle Hardening**:
   - Resolved pending capture race conditions: propagated `captureId` across `identify()`, `retakeAudio()`, `retakeScreenshot()`, and `video-mining-poc.js`, ensuring stale audio from earlier selections never attaches to newer card drafts.

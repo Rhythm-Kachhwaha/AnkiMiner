@@ -63,8 +63,9 @@
     findPrimaryVideo() {
       const videos = this.findAllVideos().filter(v => {
         // Must be in DOM
-        if (!v.isConnected) return false;
-        const rect = v.getBoundingClientRect();
+        if (!v || !v.isConnected) return false;
+        const rect = typeof v.getBoundingClientRect === "function" ? v.getBoundingClientRect() : null;
+        if (!rect || !Number.isFinite(rect.width) || !Number.isFinite(rect.height)) return false;
         // Discard 0-size invisible tracking videos
         return rect.width > 20 && rect.height > 20;
       });
@@ -80,8 +81,8 @@
       let largest = videos[0];
       let maxArea = 0;
       for (const v of videos) {
-        const rect = v.getBoundingClientRect();
-        const area = rect.width * rect.height;
+        const rect = typeof v.getBoundingClientRect === "function" ? v.getBoundingClientRect() : null;
+        const area = (rect && Number.isFinite(rect.width) && Number.isFinite(rect.height)) ? (rect.width * rect.height) : 0;
         if (area > maxArea) {
           maxArea = area;
           largest = v;
@@ -1490,7 +1491,7 @@
         ? this.activeVideo.getBoundingClientRect()
         : null;
 
-      if (!rect || rect.width <= 0 || rect.height <= 0) {
+      if (!rect || !Number.isFinite(rect.width) || !Number.isFinite(rect.height) || rect.width <= 0 || rect.height <= 0) {
         return {
           ok: false,
           error: "INVALID_VIDEO_RECT",
@@ -1513,13 +1514,17 @@
       // Attempt Tier 1: Direct canvas capture from video element (untainted / local / same-origin)
       if (typeof document !== "undefined" && typeof document.createElement === "function") {
         try {
-          const vw = this.activeVideo.videoWidth || this.activeVideo.clientWidth || 0;
-          const vh = this.activeVideo.videoHeight || this.activeVideo.clientHeight || 0;
+          const vw = Number.isFinite(this.activeVideo.videoWidth) && this.activeVideo.videoWidth > 0
+            ? this.activeVideo.videoWidth
+            : (Number.isFinite(this.activeVideo.clientWidth) ? this.activeVideo.clientWidth : 0);
+          const vh = Number.isFinite(this.activeVideo.videoHeight) && this.activeVideo.videoHeight > 0
+            ? this.activeVideo.videoHeight
+            : (Number.isFinite(this.activeVideo.clientHeight) ? this.activeVideo.clientHeight : 0);
           if (vw > 0 && vh > 0) {
-            const canvas = typeof options.createCanvas === "function"
-              ? options.createCanvas()
-              : document.createElement("canvas");
             const targetDim = cropper.calculateTargetDimensions(vw, vh, options.maxWidth || 640, options.maxHeight || 360);
+            const canvas = typeof options.createCanvas === "function"
+              ? options.createCanvas(targetDim.width, targetDim.height)
+              : document.createElement("canvas");
             canvas.width = targetDim.width;
             canvas.height = targetDim.height;
             const ctx = (typeof canvas.getContext === "function" && canvas.getContext("2d", { willReadFrequently: true })) || (typeof canvas.getContext === "function" && canvas.getContext("2d"));
@@ -1660,11 +1665,11 @@
         targetCue = (typeof this.syncEngine.findCueAtTime === "function" ? this.syncEngine.findCueAtTime(this.activeVideo.currentTime) : null) || this.syncEngine.lastActiveCue || null;
       }
 
-      // Fallback: if no cue at all and fallback slice is enabled, synthesize a 3-second slice around currentTime
+      // Fallback: if no cue at all and fallback slice is enabled, synthesize a 3-second slice preceding currentTime
       if (!targetCue && (options.fallbackSlice || options.allowFallbackSlice)) {
         const ct = this.activeVideo.currentTime || 0;
-        const sliceStart = Math.max(0, ct - 0.5);
-        const sliceEnd = ct + 2.5;
+        const sliceStart = Math.max(0, ct - 3.0);
+        const sliceEnd = ct;
         targetCue = { startTime: sliceStart, endTime: sliceEnd, text: "" };
       }
 
@@ -1919,7 +1924,7 @@
         return true;
       }
       if (message?.type === "TRIGGER_AUDIO_RECORDING") {
-        const audioOpts = Object.assign({ allowPausedPlayback: true, fallbackSlice: true }, message.options);
+        const audioOpts = Object.assign({ allowPausedPlayback: true, fallbackSlice: true, allowFallbackRecording: true }, message.options);
         this.recordSentenceAudio(message.cue, audioOpts).then(res => {
           sendResponse?.(res);
         }).catch(err => {

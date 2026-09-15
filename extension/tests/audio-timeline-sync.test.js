@@ -31,7 +31,7 @@ function testInitialAnchorEstablishment() {
   assert.equal(sync.currentTimelineId, 1);
   assert.equal(sync.anchorVideoTime, 5.0);
   assert.equal(sync.anchorSample, 48000);
-  assert.equal(sync.timelineStartSample, 48000);
+  assert.equal(sync.timelineStartSample, 0, "timelineStartSample must account for prior video time in buffer");
 
   // Test mapping: Video time 5.0s maps to sample 48,000
   const map5 = sync.videoTimeToSample(5.0);
@@ -192,7 +192,7 @@ function testTimelineDiscontinuityDetection() {
     paused: false
   });
   assert.equal(sync.currentTimelineId, 1);
-  assert.equal(sync.timelineStartSample, 48000);
+  assert.equal(sync.timelineStartSample, 0);
 
   // User seeks to video time 85.0s -> Content script increments timelineId to 2
   ringBuffer.write(new Float32Array(48000)); // total 96,000 samples
@@ -212,7 +212,7 @@ function testTimelineDiscontinuityDetection() {
   assert.equal(sync.timelineStartSample, 96000);
   assert.equal(sync.timelineSegments.length, 1, "Completed timeline 1 must be recorded in history");
   assert.equal(sync.timelineSegments[0].timelineId, 1);
-  assert.equal(sync.timelineSegments[0].startSample, 48000);
+  assert.equal(sync.timelineSegments[0].startSample, 0);
   assert.equal(sync.timelineSegments[0].endSample, 96000);
 
   // Trying to extract audio from timeline 1 while active timeline is 2 must reject with AUDIO_DISCONTINUITY

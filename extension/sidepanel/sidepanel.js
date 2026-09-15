@@ -429,7 +429,16 @@ function updateMiningUI(enabled) {
 
 async function setMiningMode(enabled) {
   updateMiningUI(enabled);
-  const result = await chrome.runtime.sendMessage({type: "SET_MINING_MODE", enabled});
+  let streamId = null;
+  if (enabled && typeof chrome !== "undefined" && chrome.tabCapture?.getMediaStreamId && chrome.tabs?.query) {
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+      if (tab?.id) {
+        streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id });
+      }
+    } catch (_) {}
+  }
+  const result = await chrome.runtime.sendMessage({type: "SET_MINING_MODE", enabled, streamId});
   if (!result?.ok) {
     setStatus(result?.error || "Capture setup failed.", true);
   }
@@ -900,6 +909,7 @@ async function identify(text) {
 function isVideoMiningActive() {
   if (videoMiningView && !videoMiningView.hidden) return true;
   if (tabBtnVideo && tabBtnVideo.classList.contains("active")) return true;
+  if (lastCaptureSource?.tabId || currentActiveCue) return true;
   return false;
 }
 
@@ -1089,7 +1099,8 @@ function retakeAudio(captureId = null) {
     options: {
       captureId: capId,
       mimeType: "audio/webm;codecs=opus",
-      allowPausedPlayback: true
+      allowPausedPlayback: true,
+      allowFallbackRecording: true
     }
   });
 }
@@ -2087,6 +2098,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
   if (message?.type === "SCREENSHOT_CAPTURE_STATUS") {
+    if (message.captureId && currentCaptureId && message.captureId !== currentCaptureId) {
+      sendResponse?.({ok: false, error: "STALE_CAPTURE"});
+      return true;
+    }
     if (!message.ok) {
       const isDrm = message.error === "DRM_PROTECTED" || message.error === "DRM_IMAGE_RESTRICTED";
       const statusText = isDrm
@@ -2121,6 +2136,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
   if (message?.type === "AUDIO_CAPTURE_STATUS") {
+    if (message.captureId && currentCaptureId && message.captureId !== currentCaptureId) {
+      sendResponse?.({ok: false, error: "STALE_CAPTURE"});
+      return true;
+    }
     if (message.pending || message.status === "PENDING") {
       currentDraftMedia.audioStatus = "pending";
       currentDraftMedia.audioBase64 = null;

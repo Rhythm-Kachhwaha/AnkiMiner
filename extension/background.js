@@ -72,13 +72,16 @@ async function ensureOffscreenDocument() {
 let isRecordingAudio = false;
 let activeCaptureTabId = null;
 
-async function startPersistentCaptureForTab(tabId) {
-  if (!tabId || typeof chrome === "undefined" || !chrome.tabCapture?.getMediaStreamId) {
+async function startPersistentCaptureForTab(tabId, providedStreamId = null) {
+  if (!tabId || typeof chrome === "undefined") {
     return { ok: false, error: "TAB_CAPTURE_UNAVAILABLE" };
   }
 
   try {
-    const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId });
+    let streamId = providedStreamId;
+    if (!streamId && chrome.tabCapture?.getMediaStreamId) {
+      streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId }).catch(() => null);
+    }
     if (!isMiningModeEnabled) {
       return { ok: false, error: "MINING_MODE_DISABLED", message: "Mining mode was disabled during setup" };
     }
@@ -142,7 +145,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         if (isMiningModeEnabled) {
           // Initialize persistent passive audio capture once on mining mode start
-          await startPersistentCaptureForTab(tab.id);
+          await startPersistentCaptureForTab(tab.id, message?.streamId || null);
         } else {
           await stopPersistentCapture();
         }
@@ -174,6 +177,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "AUDIO_SYNC_HEARTBEAT" || message?.type === "EXTRACT_SUBTITLE_AUDIO" || message?.type === "CANCEL_PENDING_AUDIO_CAPTURE" || message?.type === "GET_AUDIO_SYNC_STATE") {
     (async () => {
       try {
+        if (!await hasOffscreenDocument()) {
+          await ensureOffscreenDocument().catch(() => {});
+        }
         if (await hasOffscreenDocument()) {
           const offscreenMsg = message.type === "GET_AUDIO_SYNC_STATE"
             ? { type: "GET_SYNC_STATE" }
