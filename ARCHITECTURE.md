@@ -1,8 +1,8 @@
-# AnkiMiner Architecture
+# Kiroku Note Architecture
 
 ## System overview
 
-AnkiMiner is a local-first vocabulary mining pipeline. A Chromium/Brave extension captures Japanese text and presents the resulting card in its Side Panel. A local FastAPI backend identifies and enriches the term, persists the card in SQLite, and synchronizes it to Anki through AnkiConnect. SQLite remains authoritative if external local services are unavailable.
+Kiroku Note is a local-first vocabulary mining pipeline. A Chromium/Brave extension captures Japanese text and presents the resulting card in its Side Panel. A local FastAPI backend identifies and enriches the term, persists the card in SQLite, and synchronizes it to Anki through AnkiConnect. SQLite remains authoritative if external local services are unavailable.
 
 ## Components and responsibilities
 

@@ -3,5 +3,7 @@
   function selectedText(selection){return !selection||selection.rangeCount===0?"":selection.toString().trim().replace(/\s+/g," ");}
   function containsJapanese(text){return typeof text==="string"&&JAPANESE.test(text);}
   function captureMessage(text){return {type:"JAPANESE_TEXT_CAPTURED",text};}
-  global.AnkiMinerCapture={selectedText,containsJapanese,captureMessage};
+  const capture = {selectedText,containsJapanese,captureMessage};
+  global.KirokuCapture = capture;
+  global.AnkiMinerCapture = capture;
 })(typeof globalThis==="undefined"?window:globalThis);

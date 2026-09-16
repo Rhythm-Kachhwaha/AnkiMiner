@@ -1,5 +1,5 @@
 /**
- * AnkiMiner - Deterministic 16-Bit Mono PCM WAV Encoder
+ * Kiroku Note - Deterministic 16-Bit Mono PCM WAV Encoder
  *
  * Encodes Float32 mono PCM samples into canonical 16-bit signed integer RIFF/WAVE audio.
  * Zero external dependencies, pure vanilla JavaScript using DataView and TypedArrays.

@@ -1,5 +1,5 @@
 /**
- * AnkiMiner - Persistent Offscreen Audio Capture Engine
+ * Kiroku Note - Persistent Offscreen Audio Capture Engine
  *
  * Runs in a Manifest V3 Offscreen Document to provide continuous, passive tab audio capture.
  * 1. Owns the single active MediaStream and AudioContext for the duration of a mining session.

@@ -7,7 +7,8 @@ from pathlib import Path
 import sqlite3
 from typing import Iterator
 
-DEFAULT_DB_REL_PATH = Path("data") / "ankiminer.db"
+DEFAULT_DB_REL_PATH = Path("data") / "kiroku.db"
+LEGACY_DB_REL_PATH = Path("data") / "ankiminer.db"
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS cards (
@@ -47,13 +48,18 @@ ON cards (normalized_expression, normalized_reading, normalized_deck_name);
 
 
 def get_db_path() -> Path:
-    """Resolve the SQLite database file path from environment or default."""
-    custom_path = os.getenv("ANKIMINER_DB_PATH")
+    """Resolve the SQLite database file path from environment or default with backward compatibility."""
+    custom_path = os.getenv("KIROKU_DB_PATH") or os.getenv("ANKIMINER_DB_PATH")
     if custom_path:
         return Path(custom_path)
-    # Default is backend/data/ankiminer.db
     base_dir = Path(__file__).resolve().parent.parent.parent
-    return base_dir / DEFAULT_DB_REL_PATH
+    kiroku_path = base_dir / DEFAULT_DB_REL_PATH
+    if kiroku_path.exists():
+        return kiroku_path
+    legacy_path = base_dir / LEGACY_DB_REL_PATH
+    if legacy_path.exists():
+        return legacy_path
+    return kiroku_path
 
 
 def get_db_connection(db_path: Path | str | None = None) -> sqlite3.Connection:

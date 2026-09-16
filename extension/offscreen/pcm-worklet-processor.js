@@ -1,5 +1,5 @@
 /**
- * AnkiMiner - AudioWorklet PCM Processor
+ * Kiroku Note - AudioWorklet PCM Processor
  *
  * Runs on the high-priority Web Audio rendering thread inside the Offscreen Document.
  * 1. Ingests 128-sample multi-channel audio frames from the tabCapture stream.

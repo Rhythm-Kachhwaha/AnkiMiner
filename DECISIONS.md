@@ -1,4 +1,4 @@
-# AnkiMiner Decisions
+# Kiroku Note Decisions
 
 ## Architecture & Communication
 

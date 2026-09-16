@@ -1,8 +1,8 @@
-# AnkiMiner Agent Guide
+# Kiroku Note Agent Guide
 
 ## Purpose
 
-AnkiMiner is a local-first personal Japanese vocabulary mining tool optimized for roughly ten seconds per card:
+Kiroku Note is a local-first personal Japanese vocabulary mining tool optimized for roughly ten seconds per card:
 
 `see Japanese word -> capture -> identify/enrich -> edit -> save locally -> send/sync to Anki`
 

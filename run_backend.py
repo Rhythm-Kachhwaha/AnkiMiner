@@ -1,7 +1,7 @@
 """
-AnkiMiner Backend Runner
-------------------------
-Convenience script to start the local FastAPI backend server for AnkiMiner.
+Kiroku Note Backend Runner
+--------------------------
+Convenience script to start the local FastAPI backend server for Kiroku Note.
 Runs on http://127.0.0.1:8000.
 """
 
@@ -18,7 +18,7 @@ if BACKEND_DIR not in sys.path:
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("  AnkiMiner Local Backend Server")
+    print("  Kiroku Note Local Backend Server")
     print("  URL:      http://127.0.0.1:8000")
     print("  API Docs: http://127.0.0.1:8000/docs")
     print("  Status:   http://127.0.0.1:8000/api/anki/status")

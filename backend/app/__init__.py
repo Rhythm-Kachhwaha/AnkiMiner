@@ -1,1 +1,1 @@
-"""AnkiMiner's local FastAPI application."""
+"""Kiroku Note's local FastAPI application."""

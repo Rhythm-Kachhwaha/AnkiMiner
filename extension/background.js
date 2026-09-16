@@ -11,7 +11,7 @@ async function activeTab() {
 
 async function ensureContentScript(tabId) {
   try {
-    await chrome.tabs.sendMessage(tabId, {type: "PING_ANKI_MINER"});
+    await chrome.tabs.sendMessage(tabId, {type: "PING_KIROKU"}).catch(() => chrome.tabs.sendMessage(tabId, {type: "PING_ANKI_MINER"}));
   } catch {
     await chrome.scripting.executeScript({
       target: {tabId},

@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "AnkiMiner",
+  "name": "Kiroku Note",
   "version": "0.1.0",
   "description": "Local-first Japanese vocabulary mining.",
   "permissions": [

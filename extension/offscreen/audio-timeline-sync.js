@@ -1,5 +1,5 @@
 /**
- * AnkiMiner - Audio Timeline Synchronization & Subtitle Extraction Engine
+ * Kiroku Note - Audio Timeline Synchronization & Subtitle Extraction Engine
  *
  * Connects the video media time timeline (from content script heartbeats)
  * to the persistent Float32 circular PCM ring buffer, enabling passive,

@@ -149,7 +149,7 @@ class CardService:
         if image_val and "/api/media/" in image_val:
             image_val = image_val.split("/api/media/")[-1]
         raw_image = request.image_data or (image_val if image_val.startswith("data:image/") else None)
-        if raw_image and (raw_image.startswith("data:") or (not raw_image.startswith("http://") and not raw_image.startswith("https://") and not raw_image.startswith("ankiminer_img_"))):
+        if raw_image and (raw_image.startswith("data:") or (not raw_image.startswith("http://") and not raw_image.startswith("https://") and not raw_image.startswith("kiroku_img_") and not raw_image.startswith("ankiminer_img_"))):
             try:
                 image_val = storage.save_media(raw_image, media_type="image")
             except Exception as err:
@@ -159,7 +159,7 @@ class CardService:
         if audio_val and "/api/media/" in audio_val:
             audio_val = audio_val.split("/api/media/")[-1]
         raw_audio = request.audio_data or (audio_val if audio_val.startswith("data:audio/") else None)
-        if raw_audio and (raw_audio.startswith("data:") or (not raw_audio.startswith("http://") and not raw_audio.startswith("https://") and not raw_audio.startswith("ankiminer_audio_"))):
+        if raw_audio and (raw_audio.startswith("data:") or (not raw_audio.startswith("http://") and not raw_audio.startswith("https://") and not raw_audio.startswith("kiroku_audio_") and not raw_audio.startswith("ankiminer_audio_"))):
             try:
                 audio_val = storage.save_media(raw_audio, media_type="audio", preferred_ext="wav")
             except Exception as err:

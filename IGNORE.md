@@ -41,7 +41,7 @@ Agents should not read, modify, or consider the following files/directories as p
 ## Scripts (unless explicitly requested)
 - `*.py` files in root that are not part of the backend package (e.g., `extract_examples.py`, `inspect_structure.py`)
 
-## AnkiMiner Specific
+## Kiroku Note Specific
 - Backend tests should be in `backend/tests/` only
 - Extension tests should be in `extension/tests/` only
 - Root-level Python files are typically throwaway scripts

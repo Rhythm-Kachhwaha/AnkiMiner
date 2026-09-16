@@ -1,4 +1,4 @@
-"""Local binary media storage service for AnkiMiner."""
+"""Local binary media storage service for Kiroku Note."""
 from __future__ import annotations
 
 import base64
@@ -12,8 +12,8 @@ DEFAULT_MEDIA_REL_PATH = Path("data") / "media"
 
 
 def get_media_dir() -> Path:
-    """Resolve media directory from environment or default (backend/data/media)."""
-    custom_dir = os.getenv("ANKIMINER_MEDIA_DIR")
+    """Resolve media directory from environment (KIROKU_MEDIA_DIR / ANKIMINER_MEDIA_DIR) or default (backend/data/media)."""
+    custom_dir = os.getenv("KIROKU_MEDIA_DIR") or os.getenv("ANKIMINER_MEDIA_DIR")
     if custom_dir:
         target = Path(custom_dir)
     else:

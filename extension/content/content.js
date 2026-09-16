@@ -6,15 +6,20 @@
   }).catch(() => {});
 
   chrome.runtime.onMessage.addListener((message, _sender, respond) => {
-    if (message?.type === "PING_ANKI_MINER") respond({ok: true});
+    if (message?.type === "PING_KIROKU" || message?.type === "PING_ANKI_MINER") respond({ok: true});
     if (message?.type === "MINING_MODE_CHANGED") {
       miningMode = Boolean(message.enabled);
       respond({ok: true});
     }
   });
 
+  function getCaptureUtils() {
+    return typeof KirokuCapture !== "undefined" ? KirokuCapture : AnkiMinerCapture;
+  }
+
   async function captureSelection() {
-    const text = AnkiMinerCapture.selectedText(window.getSelection());
+    const captureUtils = getCaptureUtils();
+    const text = captureUtils.selectedText(window.getSelection());
     if (!text) return;
     if (!miningMode) {
       try {
@@ -23,7 +28,7 @@
       } catch {}
     }
     if (!miningMode) return;
-    if (!AnkiMinerCapture.containsJapanese(text)) {
+    if (!captureUtils.containsJapanese(text)) {
       chrome.runtime.sendMessage({
         type: "CAPTURE_DIAGNOSTIC",
         stage: "selection",
@@ -31,7 +36,7 @@
       }).catch(() => {});
       return;
     }
-    chrome.runtime.sendMessage(AnkiMinerCapture.captureMessage(text)).then(result => {
+    chrome.runtime.sendMessage(captureUtils.captureMessage(text)).then(result => {
       if (result && result.ok === false) {
         chrome.runtime.sendMessage({
           type: "CAPTURE_DIAGNOSTIC",

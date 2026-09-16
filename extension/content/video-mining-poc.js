@@ -11,7 +11,7 @@
 
 (() => {
   // Prevent duplicate initialization in the same frame
-  if (window.__ANKIMINER_VIDEO_POC__) {
+  if (window.__KIROKU_VIDEO_POC__ || window.__ANKIMINER_VIDEO_POC__) {
     return;
   }
 
@@ -330,7 +330,8 @@
 
     if (!range) {
       const fullText = (element.textContent || "").trim();
-      if (fullText && typeof AnkiMinerCapture !== "undefined" && AnkiMinerCapture.containsJapanese(fullText)) {
+      const captureHelper = typeof KirokuCapture !== "undefined" ? KirokuCapture : (typeof AnkiMinerCapture !== "undefined" ? AnkiMinerCapture : null);
+      if (fullText && captureHelper && captureHelper.containsJapanese(fullText)) {
         return fullText;
       }
       return null;
@@ -2226,7 +2227,7 @@
   const pocInstance = new VideoMiningPOC();
   pocInstance.init();
 
-  window.__ANKIMINER_VIDEO_POC__ = {
+  const pocExport = {
     instance: pocInstance,
     VideoDetector,
     SubtitleSynchronizer,
@@ -2238,4 +2239,7 @@
     isNetflixPlatform,
     inspectNativeTextTracks
   };
+
+  window.__KIROKU_VIDEO_POC__ = pocExport;
+  window.__ANKIMINER_VIDEO_POC__ = pocExport;
 })();

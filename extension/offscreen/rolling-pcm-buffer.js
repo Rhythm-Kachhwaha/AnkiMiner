@@ -1,5 +1,5 @@
 /**
- * AnkiMiner - Rolling Circular PCM Ring Buffer
+ * Kiroku Note - Rolling Circular PCM Ring Buffer
  *
  * Implements a bounded, fixed-capacity circular ring buffer holding ~30 seconds of Float32 mono PCM.
  * Continuously overwrites the oldest samples upon wraparound with zero memory reallocations or GC churn.
